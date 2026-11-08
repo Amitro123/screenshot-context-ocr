@@ -77,11 +77,14 @@ foreach ($name in 'eng.traineddata', 'osd.traineddata') {
     if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item $src $dst }
 }
 $heb = Join-Path $tessdata 'heb.traineddata'
-$hebOk = (Test-Path $heb) -and ((Get-Item $heb).Length -gt 1MB)
+# tessdata_best heb.traineddata is ~3.7 MB; the less accurate "fast" variant is much smaller.
+$hebMinBytes = 3000000
+$hebOk = (Test-Path $heb) -and ((Get-Item $heb).Length -gt $hebMinBytes)
 if (-not $hebOk) {
+    if (Test-Path $heb) { Write-Host "    Replacing the small 'fast' Hebrew model with the more accurate 'best' model..." }
     Retry {
         Invoke-WebRequest -UseBasicParsing 'https://github.com/tesseract-ocr/tessdata_best/raw/main/heb.traineddata' -OutFile $heb
-        if ((Get-Item $heb).Length -lt 1MB) { throw 'downloaded file is too small' }
+        if ((Get-Item $heb).Length -lt $hebMinBytes) { throw 'downloaded file is too small' }
     } 'Hebrew model download'
 }
 Good "language data in $tessdata"

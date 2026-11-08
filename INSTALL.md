@@ -43,7 +43,7 @@ Hebrew model into `%USERPROFILE%\tessdata`, runs `scripts\ocr.py --check`, then 
 | Start | `start-watcher.cmd` |
 | Stop | `stop-watcher.cmd` |
 | Auto-start on / off | `add-to-startup.cmd` / `remove-from-startup.cmd` |
-| One-off OCR from CLI | `.\.venv\Scripts\python.exe scripts\ocr.py --clipboard --copy --engine auto` |
+| One-off OCR from CLI | `.\.venv\Scripts\python.exe scripts\ocr.py --clipboard --copy` |
 
 ## Rules
 

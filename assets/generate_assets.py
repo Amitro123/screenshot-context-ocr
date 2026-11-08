@@ -50,7 +50,7 @@ def popup(kind):
         "question": (128, None),
         "working": (56, None),
         "active": (80, ("\u25cf", BLUE, T["started"])),
-        "success": (80, ("\u2714", GREEN, T["copied"].format(engine=""))),
+        "success": (80, ("\u2714", GREEN, T["copied"])),
         "warning": (110, ("\u26a0", AMBER, T["warning"].format(reasons=T["reasons"]["mixed_tokens"]))),
     }
     h, result = spec[kind]

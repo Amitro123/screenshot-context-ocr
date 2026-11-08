@@ -1,0 +1,8 @@
+---
+description: mistake-brain retrieval and log trigger for Cursor
+alwaysApply: true
+---
+
+Run /mistake-brain log immediately after any fix, revert, correction, decision, or session handoff.
+At session start, read `.agent-brain/shared/MEMORY.md` once — the same index Claude Code reads. Lessons are written only under `.agent-brain/shared/`. Do not write `.agent-brain/cursor/` or `.agent-brain/claude/`.
+Do not read PARA files or MISTAKES.md top-to-bottom. Use /mistake-brain recall to load at most 2 matching PARA files.

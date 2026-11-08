@@ -24,14 +24,14 @@ if (-not $tess) { $c = Get-Command tesseract -ErrorAction SilentlyContinue; if (
 Row ([bool]$tess) 'Tesseract' ($(if ($tess) { $tess } else { 'run install.cmd' }))
 
 $heb = Join-Path $env:USERPROFILE 'tessdata\heb.traineddata'
-$hebOk = (Test-Path $heb) -and ((Get-Item $heb).Length -gt 1MB)
-Row $hebOk 'Hebrew language data' ($(if ($hebOk) { $heb } else { 'run install.cmd' }))
+$hebOk = (Test-Path $heb) -and ((Get-Item $heb).Length -gt 3000000)
+$hebHint = if (Test-Path $heb) { 'small "fast" model (less accurate) - run install.cmd to upgrade' } else { 'run install.cmd' }
+Row $hebOk 'Hebrew language data' ($(if ($hebOk) { $heb } else { $hebHint }))
 
 if ($haveVenv -and $tess) {
     $out = & $venv (Join-Path $Root 'scripts\ocr.py') --check 2>&1
     $pass = ($LASTEXITCODE -eq 0)
     Row $pass 'OCR self-check' (($out | Select-Object -First 1) -join ' ')
-    $out | Where-Object { $_ -like 'INFO:*' } | ForEach-Object { Write-Host "         $_" -ForegroundColor DarkGray }
 }
 
 $running = Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^pythonw?\.exe$' -and $_.CommandLine -like '*clipboard-watcher.pyw*' }

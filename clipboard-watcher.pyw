@@ -4,7 +4,7 @@ clipboard-watcher.pyw - Screenshot-to-Claude OCR watcher.
 Runs silently in the background (no console window on Windows).
 When a new screenshot lands on the clipboard (Win+Shift+S / Snipping Tool),
 shows a small popup asking whether to extract its text for Claude.
-If the user confirms, runs scripts/ocr.py --clipboard --copy --engine auto, which
+If the user confirms, runs scripts/ocr.py --clipboard --copy, which
 replaces the clipboard image with the extracted text (Ctrl+V into Claude).
 
 Start: start-watcher.cmd      Stop: stop-watcher.cmd
@@ -83,14 +83,14 @@ _get_seq = ctypes.windll.user32.GetClipboardSequenceNumber
 # -- OCR (background thread) ----------------------------------------------------
 
 def _run_ocr_bg():
-    result = {"ok": False, "msg": "", "warnings": [], "engine": ""}
+    result = {"ok": False, "msg": "", "warnings": []}
     if not PYTHON.exists() or not OCR_SCRIPT.exists():
         result["msg"] = T["install_incomplete"]
         _results.put(result)
         return
     try:
         r = subprocess.run(
-            [str(PYTHON), str(OCR_SCRIPT), "--clipboard", "--copy", "--engine", "auto"],
+            [str(PYTHON), str(OCR_SCRIPT), "--clipboard", "--copy"],
             capture_output=True, timeout=120, creationflags=CREATE_NO_WINDOW)
         err = r.stderr.decode("utf-8", errors="replace")
         result["ok"] = r.returncode == 0
@@ -98,9 +98,7 @@ def _run_ocr_bg():
             for line in err.splitlines():
                 if line.startswith("WARN:"):
                     result["warnings"].append(line[5:].strip())
-                elif line.startswith("ENGINE:"):
-                    result["engine"] = line[7:].strip()
-            _log(f"ocr ok engine={result['engine']} chars={len(r.stdout)} warnings={result['warnings']}")
+            _log(f"ocr ok chars={len(r.stdout)} warnings={result['warnings']}")
         else:
             result["msg"] = err.strip().splitlines()[-1] if err.strip() else "unknown error"
             _log(f"ocr failed: {result['msg'][:500]}")
@@ -235,9 +233,8 @@ def _show_result(root_win, res):
             icon, color, ms, h = "⚠", AMBER, 10000, 110
             body = T["warning"].format(reasons=reasons)
         else:
-            engine = T["engine_windows"] if res["engine"] == "windows" else ""
             icon, color, ms, h = "✔", GREEN, 5000, 80
-            body = T["copied"].format(engine=engine)
+            body = T["copied"]
 
     win, inner = _popup(root_win, 380, h)
     row = tk.Frame(inner, bg=DARK)

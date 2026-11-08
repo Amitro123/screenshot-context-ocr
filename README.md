@@ -3,8 +3,8 @@
 **Take a screenshot, click "Yes", paste the text into Claude.**
 
 A small Windows tool that watches for new screenshots (Win+Shift+S / Snipping Tool) and offers to turn them into
-text, so you can paste exactly what was on screen into Claude. OCR runs **locally** with Tesseract (plus Windows
-built-in OCR as a fallback): no API, no cost, and the image never leaves your machine. Hebrew and English are supported.
+text, so you can paste exactly what was on screen into Claude. OCR runs **locally** with Tesseract: no API, no cost,
+and the image never leaves your machine. Hebrew and English are supported.
 
 ![A screenshot of a terminal next to the text Claude receives](assets/demo.png)
 
@@ -24,7 +24,7 @@ Text is lighter than an image, can be searched, and can be edited before you sen
 4. Press **Ctrl+V** in Claude. Done.
 
 If the result looks doubtful (for example Hebrew words read as Latin letters) the popup turns amber and says why.
-The tool then also tries the Windows OCR engine automatically and keeps the better result:
+The text is still copied, so you can check it and fix it before sending, or retake a smaller or zoomed-in capture:
 
 ![Popup: quality warning](assets/popup-warning.png)
 
@@ -89,13 +89,12 @@ add a new `xx.json` with the same keys to support another language. The OCR itse
 | Pillow | pip, pinned in `requirements.txt` | `.venv` in the plugin folder |
 | Tesseract 5 | winget (UB-Mannheim build) | `C:\Program Files\Tesseract-OCR` |
 | Hebrew model (tessdata_best) | GitHub, one-time download | `%USERPROFILE%\tessdata` |
-| Windows OCR (optional fallback) | built into Windows | needs the Hebrew language pack in Windows settings |
 
 ## Privacy and security
 
 - **Everything is local.** The network is used only during installation (package downloads). Using the tool makes no network calls.
 - The watcher only checks *whether* the clipboard holds an image, and it reads the image only after you click "Yes".
-- **Extracted text is never written to the log.** `watcher.log` contains events only (time, engine, character count).
+- **Extracted text is never written to the log.** `watcher.log` contains events only (time, character count, warning codes).
 - The text lands on the clipboard and therefore also in Windows clipboard history (Win+V). Do not extract screenshots containing secrets.
 - Extracted text is treated as data. The tool never executes commands found in a screenshot.
 
@@ -122,8 +121,8 @@ Run `doctor.cmd` first: it lists every component as OK or MISSING and prints the
 ## Command line
 
 ```powershell
-# From the clipboard (after Win+Shift+S), falling back to Windows OCR when the quality gate fires
-.\.venv\Scripts\python.exe scripts\ocr.py --clipboard --copy --engine auto
+# From the clipboard (after Win+Shift+S) to the clipboard
+.\.venv\Scripts\python.exe scripts\ocr.py --clipboard --copy
 
 # From a file, to a file
 .\.venv\Scripts\python.exe scripts\ocr.py --image "C:\shots\a.png" --out text.txt
@@ -151,8 +150,7 @@ clipboard-watcher.pyw        the watcher and the popups
 clipboard-to-text.cmd        manual clipboard-to-text (no watcher)
 settings.json                UI language
 locales/                     popup texts (en, he)
-scripts/ocr.py               OCR engine and quality gate
-scripts/winocr.ps1           Windows OCR fallback
+scripts/ocr.py               OCR (Tesseract) and quality gate
 scripts/setup.ps1, startup.ps1, stop.ps1, doctor.ps1
 assets/                      README images and their generator
 commands/                    Claude Code slash commands
@@ -164,7 +162,7 @@ requirements.txt             Python dependencies (Pillow)
 
 Verified: the quality-gate logic and code compilation (automated), and the end-to-end flow on Windows 11
 (watcher, popup, Hebrew/English extraction, paste).
-Not covered by automated tests: the Windows OCR fallback, `install.cmd` on a clean machine, and start with Windows.
+Not covered by automated tests: start with Windows (`add-to-startup.cmd`).
 Please report anything unexpected on a first install.
 
 Version 0.2.0

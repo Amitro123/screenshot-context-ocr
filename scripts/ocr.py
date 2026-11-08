@@ -1,6 +1,5 @@
 """Offline screenshot OCR. No network calls or model API calls."""
 import argparse
-import base64
 import csv
 import io
 import json
@@ -74,7 +73,7 @@ def extract(exe, image, args):
             cmd += ['--tessdata-dir', args.tessdata]
         cmd += ['-c', 'tessedit_create_txt=1', '-c', 'tessedit_create_tsv=1']
         run(cmd)
-        text = base.with_suffix('.txt').read_text(encoding='utf-8').strip()
+        text = clean(base.with_suffix('.txt').read_text(encoding='utf-8')).strip()
         rows = list(csv.DictReader(io.StringIO(base.with_suffix('.tsv').read_text(encoding='utf-8')), delimiter='\t'))
         words = [r for r in rows if r.get('level') == '5' and r.get('text', '').strip()]
         low = [{'text': r['text'], 'confidence': float(r['conf'])} for r in words if float(r['conf']) < 60]
@@ -89,7 +88,25 @@ COMMON_ACRONYMS = {
     'SSH', 'DNS', 'HTTP', 'CI', 'CD', 'PR', 'VM', 'IT', 'CIO', 'ROI', 'SDK', 'CLI', 'MCP', 'LLM', 'RAG', 'OCR', 'RTL',
     'LTR', 'TV', 'PC', 'DB', 'OS', 'IP', 'TCP', 'SSO', 'VPN', 'CSV', 'XML', 'YAML', 'GIT', 'NPM', 'PIP', 'RAM', 'SSD',
 }
-SHORT_LATIN = re.compile(r'^[A-Za-z]{2,3}[0-9]?$')
+SHORT_UPPER = re.compile(r'^[A-Z]{2,4}[0-9]?$')      # NIN, ON, DY, WINN ...
+SHORT_CAPITALIZED = re.compile(r'^[A-Z][a-z]$')       # Da, Yo ...
+SHORT_LOWER = re.compile(r'^[a-z]{2}$')               # ee, rr, nr, pe ...
+COMMON_LOWER = {'ok', 'id', 'to', 'in', 'on', 'of', 'vs', 'pc', 'ip', 'db', 'os', 'ui', 'ux', 'ci', 'cd', 'pr', 'vm',
+                'it', 'is', 'as', 'at', 'be', 'by', 'do', 'if', 'me', 'my', 'no', 'or', 'so', 'up', 'we', 'go'}
+BIDI_MARKS = re.compile('[‎‏‪-‮⁦-⁩]')  # invisible direction marks OCR inserts
+
+
+def clean(text):
+    """Drop invisible bidi control characters: they only add noise when the text is pasted into Claude."""
+    return BIDI_MARKS.sub('', text)
+
+
+def is_noise_token(token):
+    if SHORT_UPPER.match(token):
+        return token.upper().rstrip('0123456789') not in COMMON_ACRONYMS
+    if SHORT_CAPITALIZED.match(token):
+        return True
+    return bool(SHORT_LOWER.match(token)) and token not in COMMON_LOWER
 
 
 def latin_noise(text):
@@ -101,7 +118,7 @@ def latin_noise(text):
         if hebrew < 10 or hebrew < latin:
             continue
         for token in SEPARATORS.split(line.replace(' ', '-')):
-            if SHORT_LATIN.match(token) and token.upper().rstrip('0123456789') not in COMMON_ACRONYMS:
+            if is_noise_token(token):
                 noise += 1
     return noise
 
@@ -145,38 +162,6 @@ def quality_warnings(text, report):
     return out
 
 
-# ------------------------------------------------------------ Windows built-in OCR
-
-def windows_ocr(image, lang_tags='he-IL,he'):
-    """Windows.Media.Ocr via PowerShell. Local only; needs the Hebrew language pack."""
-    if os.name != 'nt':
-        raise RuntimeError('Windows OCR is only available on Windows.')
-    script = Path(__file__).with_name('winocr.ps1').read_text(encoding='utf-8')
-    encoded = base64.b64encode(script.encode('utf-16-le')).decode('ascii')
-    with tempfile.TemporaryDirectory(prefix='winocr-') as tmp:
-        source = Path(tmp) / 'input.png'
-        rgb = flatten(image)
-        if max(rgb.size) < 2000:
-            rgb = rgb.resize((rgb.width * 2, rgb.height * 2), Image.Resampling.LANCZOS)
-        rgb.save(source)
-        env = os.environ.copy()
-        env['WINOCR_IMAGE'] = str(source)
-        env['WINOCR_LANG'] = lang_tags
-        result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-                                env=env, capture_output=True, timeout=60, creationflags=CREATE_NO_WINDOW)
-    if result.returncode:
-        raise RuntimeError(result.stderr.decode('utf-8', errors='replace').strip()[:300])
-    return result.stdout.decode('utf-8', errors='replace').strip()
-
-
-def windows_ocr_available():
-    try:
-        windows_ocr(Image.new('RGB', (64, 64), 'white'))
-        return True
-    except Exception:
-        return False
-
-
 def copy_text(text):
     if os.name != 'nt':
         raise RuntimeError('--copy is currently supported on native Windows only; use --out elsewhere.')
@@ -198,8 +183,6 @@ def main():
     src.add_argument('--clipboard', action='store_true')
     p.add_argument('--check', action='store_true')
     p.add_argument('--lang', choices=['eng', 'heb', 'heb+eng', 'eng+heb'], default='heb+eng')
-    p.add_argument('--engine', choices=['tesseract', 'windows', 'auto'], default='tesseract',
-                   help='auto = Tesseract, falling back to Windows OCR when the quality gate fires')
     p.add_argument('--psm', type=int, choices=[3, 6, 11], default=3)
     p.add_argument('--scale', type=int, choices=[1, 2, 3], default=3)
     p.add_argument('--invert', choices=['auto', 'yes', 'no'], default='auto')
@@ -214,15 +197,10 @@ def main():
         if (user_tessdata / 'heb.traineddata').is_file():
             args.tessdata = str(user_tessdata)
     try:
-        exe = None
-        if args.engine != 'windows':
-            exe = engine(args.tesseract)
-            check_languages(exe, args.lang, args.tessdata)
+        exe = engine(args.tesseract)
+        check_languages(exe, args.lang, args.tessdata)
         if args.check:
-            if exe:
-                print('OK: Tesseract and requested languages available.')
-            print('INFO: Windows OCR fallback (Hebrew) is ' +
-                  ('available.' if windows_ocr_available() else 'not available (optional: add the Hebrew language pack in Windows settings).'))
+            print('OK: Tesseract and requested languages available.')
             return 0
         if not args.image and not args.clipboard:
             p.error('Provide --image PATH or --clipboard.')
@@ -235,23 +213,7 @@ def main():
         if not isinstance(image, Image.Image):
             raise ValueError('Clipboard has no image. Capture a region with Win+Shift+S first.')
 
-        engine_used = 'tesseract'
-        if args.engine == 'windows':
-            text = windows_ocr(image)
-            report = {'languages': 'windows', 'word_count': len(text.split()), 'low_confidence_words': [],
-                      'note': 'Windows OCR gives no confidence values. Verify commands, paths, numbers.'}
-            engine_used = 'windows'
-        else:
-            text, report = extract(exe, image, args)
-            if args.engine == 'auto' and quality_warnings(text, report):
-                try:
-                    alt = windows_ocr(image)
-                    if alt and suspicion_score(alt) < suspicion_score(text):
-                        text, engine_used = alt, 'windows'
-                        report = {'languages': 'windows', 'word_count': len(alt.split()), 'low_confidence_words': [],
-                                  'note': 'Windows OCR gives no confidence values. Verify commands, paths, numbers.'}
-                except Exception as exc:  # fallback is best-effort; keep the Tesseract result
-                    print('NOTE: Windows OCR fallback unavailable: ' + str(exc), file=sys.stderr)
+        text, report = extract(exe, image, args)
         if not text:
             raise ValueError('No text detected. Crop/zoom the screenshot or try --psm 6.')
         warnings = quality_warnings(text, report)
@@ -264,7 +226,6 @@ def main():
         if hasattr(sys.stdout, 'reconfigure'):
             sys.stdout.reconfigure(encoding='utf-8')
         print(text)
-        print('ENGINE:' + engine_used, file=sys.stderr)
         for warning in warnings:
             print('WARN:' + warning, file=sys.stderr)
         print(f"OCR: {report['word_count']} words; {len(report['low_confidence_words'])} below confidence 60. Verify technical literals.", file=sys.stderr)
