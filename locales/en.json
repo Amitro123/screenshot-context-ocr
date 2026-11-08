@@ -1,0 +1,20 @@
+{
+  "rtl": false,
+  "toast_title": "Screenshot detected",
+  "toast_body": "Extract the text to work with Claude?",
+  "yes": "Yes, extract text",
+  "no": "No",
+  "working": "Extracting text, please wait...",
+  "started": "Watcher is active.\nTake a screenshot (Win+Shift+S) to extract text.",
+  "copied": "Text copied to clipboard{engine}!\nPaste it with Ctrl+V straight into Claude.",
+  "engine_windows": " (Windows OCR)",
+  "warning": "Text copied, but the quality looks doubtful: {reasons}.\nCheck it before sending, or retake a smaller or zoomed-in capture.",
+  "error": "OCR error:\n{detail}",
+  "install_incomplete": "Installation incomplete. Run install.cmd.",
+  "timeout": "The operation took longer than 120 seconds.",
+  "reasons": {
+    "mixed_tokens": "Hebrew words read as Latin letters or digits",
+    "reversed_order": "Hebrew word order may be reversed",
+    "low_confidence": "many low-confidence words"
+  }
+}

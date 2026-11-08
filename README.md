@@ -1,130 +1,170 @@
 # Screenshot Context
 
-**צילמת מסך? קפצה שאלה: "לחלץ את הטקסט לעבודה עם קלוד?" - לחיצה אחת, והטקסט בלוח, מוכן להדבקה.**
+**Take a screenshot, click "Yes", paste the text into Claude.**
 
-חילוץ טקסט (עברית ואנגלית) מצילומי מסך, מקומי לגמרי: בלי API, בלי עלות, בלי שליחת התמונה לשום מקום.
-טקסט הוא זול ומדויק יותר לקלוד מאשר תמונה, ואפשר לערוך אותו לפני השליחה.
+A small Windows tool that watches for new screenshots (Win+Shift+S / Snipping Tool) and offers to turn them into
+text, so you can paste exactly what was on screen into Claude. OCR runs **locally** with Tesseract (plus Windows
+built-in OCR as a fallback): no API, no cost, and the image never leaves your machine. Hebrew and English are supported.
 
-## איך זה נראה
+![A screenshot of a terminal next to the text Claude receives](assets/demo.png)
 
-1. מצלמים אזור עם **Win+Shift+S** (Snipping Tool).
-2. בפינה הימנית-תחתונה קופצת שאלה: **"האם לחלץ את הטקסט לעבודה עם קלוד?"**
-3. לוחצים **"כן, חלץ טקסט"**. תוך שניות מופיע אישור ירוק, והטקסט כבר בלוח.
-4. **Ctrl+V** בתוך קלוד. זהו.
+Text is lighter than an image, can be searched, and can be edited before you send it.
 
-אם איכות החילוץ חשודה (למשל עברית שנקראה כרצף אותיות לטיניות), תופיע אזהרה כתומה ובה סיבה.
-במקרה כזה הכלי מנסה אוטומטית גם את מנוע ה-OCR של Windows ובוחר את התוצאה הטובה יותר.
+## How it works
 
-## התקנה
+1. Capture a region with **Win+Shift+S**.
+2. A popup appears at the bottom-right of the screen:
 
-### דרך א' - לבקש מקלוד (Claude Code)
-פתח את Claude Code בתיקיית הפלאגין והדבק:
+   ![Popup: Screenshot detected - Extract the text to work with Claude?](assets/popup-question.png)
 
-> תתקין את זה.
+3. Click **Yes, extract text**. After a couple of seconds a green confirmation appears and the text is already on your clipboard:
 
-(קלוד קורא לבד את `CLAUDE.md` ו-`INSTALL.md` שבתיקייה. בסיום הוא מריץ `doctor.cmd` כדי לוודא שהכול תקין.)
+   ![Popup: Text copied to clipboard](assets/popup-success.png)
 
-> **שים לב:** זה עובד כש-Claude רץ ישירות על ה-Windows שלך (Claude Code ב-PowerShell). Claude שרץ בתוך
-> סביבה מבודדת (כמו Cowork) לא יכול להתקין על המחשב, ויפנה אותך לדרך ב'.
+4. Press **Ctrl+V** in Claude. Done.
 
-### דרך ב' - לחיצה כפולה (לכולם)
-1. חלץ את ה-ZIP לתיקייה קבועה (למשל `C:\Tools\screenshot-context`).
-2. לחץ פעמיים על **`install.cmd`**.
-3. אשר את בקשת ההרשאה של Windows אם היא מופיעה (התקנת Tesseract).
-4. חכה לשורה `Done.` ולחלון קטן "ה-watcher פעיל". ההתקנה לוקחת 2-5 דקות, בעיקר הורדות.
+If the result looks doubtful (for example Hebrew words read as Latin letters) the popup turns amber and says why.
+The tool then also tries the Windows OCR engine automatically and keeps the better result:
 
-ההתקנה בטוחה להרצה חוזרת. אם משהו נכשל, מריצים שוב.
+![Popup: quality warning](assets/popup-warning.png)
 
-**להפעלה אוטומטית עם כל כניסה ל-Windows:** לחץ פעמיים על `add-to-startup.cmd` (אחרי ההתקנה).
+When the watcher starts (manually, or with Windows) you see a short blue confirmation that it is running:
 
-## הדלקה וכיבוי
+![Popup: watcher is active](assets/popup-active.png)
 
-| פעולה | קובץ |
+> The images above are illustrations drawn with the same colors and texts as the real popups
+> (`assets/generate_assets.py` regenerates them). Feel free to replace them with real screenshots.
+
+## Install
+
+### Option A - ask Claude (Claude Code on Windows)
+
+Clone or download this repository, open Claude Code in the folder and write:
+
+> Install this.
+
+Claude reads `CLAUDE.md` and `INSTALL.md` by itself, runs the installer and verifies the result with `doctor.cmd`.
+
+> This works when Claude runs directly on your Windows machine (Claude Code in PowerShell). A Claude running inside an
+> isolated sandbox (for example Cowork) cannot install software on your computer - use Option B.
+
+### Option B - double-click
+
+1. Download or clone the repository to a permanent folder (for example `C:\Tools\screenshot-context`).
+2. Double-click **`install.cmd`**.
+3. Accept the Windows permission prompt if it appears (Tesseract installation).
+4. Wait for `Done.` and the small "Watcher is active" popup. Installation takes 2-5 minutes, mostly downloads.
+
+The installer is safe to run again: every step is skipped when already done.
+To also start the watcher automatically with Windows, run `install.cmd --startup`, or later `add-to-startup.cmd`.
+
+## Turn it on and off
+
+| Action | File |
 |---|---|
-| להדליק | `start-watcher.cmd` (לחיצה כפולה; אין חלון, זה תקין) |
-| לכבות | `stop-watcher.cmd` |
-| להפעיל עם Windows | `add-to-startup.cmd` |
-| לבטל הפעלה עם Windows | `remove-from-startup.cmd` |
-| לבדוק מה תקין ומה חסר | `doctor.cmd` |
+| Start | `start-watcher.cmd` (double-click; there is no window, that is expected) |
+| Stop | `stop-watcher.cmd` |
+| Start automatically with Windows | `add-to-startup.cmd` |
+| Stop starting with Windows | `remove-from-startup.cmd` |
+| Check what works and what is missing | `doctor.cmd` |
 
-הדלקה כפולה בטוחה: רק מופע אחד רץ.
+Starting twice is harmless: only one instance runs.
 
-## מה מותקן ולאן
+## Language of the popups
 
-| רכיב | מקור | מיקום |
+The popups are in English by default. For Hebrew popups, edit `settings.json`:
+
+```json
+{ "language": "he" }
+```
+
+then run `stop-watcher.cmd` and `start-watcher.cmd`. Translations live in `locales/` (`en.json`, `he.json`);
+add a new `xx.json` with the same keys to support another language. The OCR itself reads Hebrew and English either way.
+
+## What gets installed
+
+| Component | Source | Location |
 |---|---|---|
-| Python 3.10+ | קיים במחשב (או winget) | מערכת |
-| Pillow | pip, לפי `requirements.txt` | `.venv` בתיקיית הפלאגין |
-| Tesseract 5 | winget (UB-Mannheim) | `C:\Program Files\Tesseract-OCR` |
-| מודל עברית (tessdata_best) | GitHub, הורדה חד-פעמית | `%USERPROFILE%\tessdata` |
-| OCR של Windows (אופציונלי) | מובנה ב-Windows | דורש חבילת שפה עברית בהגדרות |
+| Python 3.10+ | already on the machine (or winget) | system |
+| Pillow | pip, pinned in `requirements.txt` | `.venv` in the plugin folder |
+| Tesseract 5 | winget (UB-Mannheim build) | `C:\Program Files\Tesseract-OCR` |
+| Hebrew model (tessdata_best) | GitHub, one-time download | `%USERPROFILE%\tessdata` |
+| Windows OCR (optional fallback) | built into Windows | needs the Hebrew language pack in Windows settings |
 
-## פרטיות ואבטחה
+## Privacy and security
 
-- **הכול מקומי.** רשת נדרשת רק בהתקנה (הורדת החבילות). בזמן שימוש אין שום קריאת רשת.
-- ה-watcher בודק רק *אם* בלוח יש תמונה, ופועל רק אחרי שאישרת בלחיצה. תמונה שלא אושרה לא נקראת.
-- הטקסט המחולץ **לא נשמר בלוג**. `watcher.log` מכיל רק אירועים (זמן, מנוע, מספר תווים).
-- הטקסט נכנס ללוח ובפועל נשאר שם, גם בהיסטוריית הלוח של Windows (Win+V). אל תחלץ צילום עם סיסמאות או מידע רגיש.
-- הטקסט המחולץ הוא נתון בלבד. כלי ה-OCR לא מריץ פקודות ולא מפרש הוראות מתוך הצילום.
+- **Everything is local.** The network is used only during installation (package downloads). Using the tool makes no network calls.
+- The watcher only checks *whether* the clipboard holds an image, and it reads the image only after you click "Yes".
+- **Extracted text is never written to the log.** `watcher.log` contains events only (time, engine, character count).
+- The text lands on the clipboard and therefore also in Windows clipboard history (Win+V). Do not extract screenshots containing secrets.
+- Extracted text is treated as data. The tool never executes commands found in a screenshot.
 
-## מגבלות (חשוב לדעת)
+## Limits you should know about
 
-- **מזהים טכניים** (פקודות, נתיבים, שמות קבצים, מספרים) נקראים לפעמים לא נכון (`utf8` -> `utf38`). בדוק אותם.
-- **עברית משולבת באנגלית באותה שורה** עלולה לשבש סימני פיסוק וכיווניות.
-- טקסט קטן מאוד או ברקע צבעוני מתחלף בקלות: צלם אזור קטן יותר או הגדל (Ctrl+פלוס) לפני הצילום.
-- אם הטקסט זמין ישירות (טרמינל, קובץ, מסמך), **העתק אותו במקום OCR**. זה תמיד מדויק יותר.
-- הסימון "איכות חשודה" הוא היוריסטיקה: היעדר אזהרה אינו הוכחה שהחילוץ מדויק.
+- **Technical strings** (commands, paths, file names, numbers) are sometimes misread (`utf8` -> `utf38`). Verify them.
+- **Mixed Hebrew and English on one line** can scramble punctuation and direction.
+- Very small text or colored backgrounds are harder: capture a smaller region or zoom in (Ctrl+plus) first.
+- If the text is available directly (terminal, file, document), **copy it instead of using OCR**. That is always more accurate.
+- The quality warning is a heuristic. No warning does not prove the extraction is correct.
 
-## פתרון תקלות
+## Troubleshooting
 
-| בעיה | פתרון |
+| Problem | Fix |
 |---|---|
-| לא קופצת שאלה אחרי צילום | ודא שה-watcher רץ (`start-watcher.cmd`). אם עדיין לא, הרץ בטרמינל: `.\.venv\Scripts\python.exe clipboard-watcher.pyw` וקרא את `watcher.log`. |
-| `HTTP 403` בהתקנה | חסימת פרוקסי ארגוני, לרוב זמנית: הרץ שוב `install.cmd`. אם נמשך, בקש מ-IT mirror פנימי של PyPI. |
-| `Missing OCR languages: heb` | הרץ שוב `install.cmd` (מוריד מחדש את מודל העברית). |
-| שגיאת OCR אחרי "כן" | הרץ `.\.venv\Scripts\python.exe scripts\ocr.py --check` והעבר את הפלט. |
-| `install.cmd` נחסם על ידי מדיניות | הרץ מ-PowerShell: `powershell -ExecutionPolicy Bypass -File scripts\setup.ps1` |
+| No popup after a screenshot | Make sure the watcher is running (`start-watcher.cmd`). Still nothing: run `.\.venv\Scripts\python.exe clipboard-watcher.pyw` in a terminal, take a screenshot and read `watcher.log`. |
+| `HTTP 403` during installation | Usually a corporate proxy, often transient: run `install.cmd` again. If it persists, ask IT for an internal PyPI mirror. |
+| `Missing OCR languages: heb` | Run `install.cmd` again (re-downloads the Hebrew model). |
+| OCR error after clicking "Yes" | Run `.\.venv\Scripts\python.exe scripts\ocr.py --check` and share the output. |
+| `install.cmd` is blocked by policy | From PowerShell: `powershell -ExecutionPolicy Bypass -File scripts\setup.ps1` |
 
-## שימוש מתקדם (CLI)
+Run `doctor.cmd` first: it lists every component as OK or MISSING and prints the next step.
+
+## Command line
 
 ```powershell
-# מהלוח (אחרי Win+Shift+S), עם נפילה אוטומטית ל-OCR של Windows אם האיכות חשודה
+# From the clipboard (after Win+Shift+S), falling back to Windows OCR when the quality gate fires
 .\.venv\Scripts\python.exe scripts\ocr.py --clipboard --copy --engine auto
 
-# מקובץ, אל קובץ
+# From a file, to a file
 .\.venv\Scripts\python.exe scripts\ocr.py --image "C:\shots\a.png" --out text.txt
 
-# טיפים: --psm 6 לבלוק אחיד (טרמינל), --psm 11 לטקסט פזור, --invert no/yes אם מצב כהה זוהה לא נכון
+# Tips: --psm 6 for one uniform block (terminal), --psm 11 for sparse text,
+#       --invert no|yes if dark mode is detected wrongly
 ```
 
-כמו כן, אפשר מתוך Claude Code: `/screenshot-context:ocr clipboard` ו-`/screenshot-context:install`.
+From Claude Code: `/screenshot-context:ocr clipboard` and `/screenshot-context:install`.
 
-## הסרה
+## Uninstall
 
-1. `stop-watcher.cmd` ואחר כך `remove-from-startup.cmd`.
-2. מחק את תיקיית הפלאגין (כולל `.venv`) ואת `%USERPROFILE%\tessdata`.
-3. Tesseract: Settings -> Apps -> Tesseract-OCR -> Uninstall (או `winget uninstall UB-Mannheim.TesseractOCR`).
+1. Run `stop-watcher.cmd`, then `remove-from-startup.cmd`.
+2. Delete the plugin folder (including `.venv`) and `%USERPROFILE%\tessdata`.
+3. Tesseract: Settings -> Apps -> Tesseract-OCR -> Uninstall (or `winget uninstall UB-Mannheim.TesseractOCR`).
 
-## מבנה התיקייה
+## Repository layout
 
 ```
-install.cmd                 התקנה בלחיצה כפולה
-start-watcher.cmd / stop-watcher.cmd
-add-to-startup.cmd / remove-from-startup.cmd
-clipboard-watcher.pyw       ה-watcher והחלון הקופץ
-clipboard-to-text.cmd       המרה ידנית של הלוח (בלי watcher)
-scripts/ocr.py              מנוע החילוץ ושער האיכות
-scripts/winocr.ps1          OCR של Windows (נפילה חלופית)
-scripts/setup.ps1, startup.ps1, stop.ps1
-commands/                   פקודות Claude Code
-INSTALL.md                  הוראות התקנה לקלוד
-requirements.txt            תלויות Python (Pillow)
+install.cmd                  one-click installer
+start-watcher.cmd, stop-watcher.cmd
+add-to-startup.cmd, remove-from-startup.cmd
+doctor.cmd                   health check
+clipboard-watcher.pyw        the watcher and the popups
+clipboard-to-text.cmd        manual clipboard-to-text (no watcher)
+settings.json                UI language
+locales/                     popup texts (en, he)
+scripts/ocr.py               OCR engine and quality gate
+scripts/winocr.ps1           Windows OCR fallback
+scripts/setup.ps1, startup.ps1, stop.ps1, doctor.ps1
+assets/                      README images and their generator
+commands/                    Claude Code slash commands
+CLAUDE.md, INSTALL.md        instructions for Claude
+requirements.txt             Python dependencies (Pillow)
 ```
 
-## סטטוס בדיקות
+## Status
 
-נבדק: לוגיקת שער האיכות, הידור הקוד, ורצף OCR מקצה לקצה על Windows 11 (watcher, חילוץ עברית/אנגלית, הדבקה).
-לא נבדק בסביבת בדיקות אוטומטית: מנוע ה-OCR של Windows כחלופה, `install.cmd` על מחשב נקי, והפעלה עם Windows.
-בדוק אותם בהתקנה ראשונה והחזר משוב.
+Verified: the quality-gate logic and code compilation (automated), and the end-to-end flow on Windows 11
+(watcher, popup, Hebrew/English extraction, paste).
+Not covered by automated tests: the Windows OCR fallback, `install.cmd` on a clean machine, and start with Windows.
+Please report anything unexpected on a first install.
 
-גרסה 0.2.0 · רישיון: שימוש פנימי
+Version 0.2.0

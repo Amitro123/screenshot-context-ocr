@@ -8,10 +8,13 @@ If the user confirms, runs scripts/ocr.py --clipboard --copy --engine auto, whic
 replaces the clipboard image with the extracted text (Ctrl+V into Claude).
 
 Start: start-watcher.cmd      Stop: stop-watcher.cmd
+UI language: settings.json {"language": "en" | "he"}, or env SCREENSHOT_CONTEXT_LANG.
 Everything is local. Extracted text is never written to the log file.
 """
 
 import ctypes
+import json
+import os
 import queue
 import subprocess
 import sys
@@ -45,6 +48,30 @@ def _log(msg):
     except Exception:
         pass
 
+# -- Localisation ----------------------------------------------------------------
+
+def _load_locale():
+    lang = os.environ.get("SCREENSHOT_CONTEXT_LANG")
+    if not lang:
+        try:
+            lang = json.loads((PLUGIN_DIR / "settings.json").read_text(encoding="utf-8")).get("language")
+        except Exception:
+            lang = None
+    for code in (lang, "en"):
+        if not code:
+            continue
+        try:
+            return json.loads((PLUGIN_DIR / "locales" / f"{code}.json").read_text(encoding="utf-8"))
+        except Exception as e:
+            _log(f"locale {code!r} not loaded: {e!r}")
+    raise SystemExit("No usable locale found in locales/")
+
+T = _load_locale()
+RTL = bool(T.get("rtl"))
+SIDE = tk.RIGHT if RTL else tk.LEFT      # pack direction
+ANCHOR = "e" if RTL else "w"             # text/row alignment
+JUSTIFY = "right" if RTL else "left"
+
 # -- Shared state ------------------------------------------------------------
 
 _actions = queue.Queue()   # watcher thread -> UI
@@ -58,7 +85,7 @@ _get_seq = ctypes.windll.user32.GetClipboardSequenceNumber
 def _run_ocr_bg():
     result = {"ok": False, "msg": "", "warnings": [], "engine": ""}
     if not PYTHON.exists() or not OCR_SCRIPT.exists():
-        result["msg"] = "ההתקנה לא הושלמה. הרץ install.cmd."
+        result["msg"] = T["install_incomplete"]
         _results.put(result)
         return
     try:
@@ -78,7 +105,7 @@ def _run_ocr_bg():
             result["msg"] = err.strip().splitlines()[-1] if err.strip() else "unknown error"
             _log(f"ocr failed: {result['msg'][:500]}")
     except subprocess.TimeoutExpired:
-        result["msg"] = "הפעולה ארכה יותר מ-120 שניות."
+        result["msg"] = T["timeout"]
         _log("ocr timeout")
     except Exception as e:
         result["msg"] = str(e)
@@ -122,12 +149,7 @@ def _watch():
 DARK, TEXT, SUBTLE = "#1e1e2e", "#cdd6f4", "#a6adc8"
 BLUE, GREEN, RED, AMBER = "#89b4fa", "#a6e3a1", "#f38ba8", "#f9e2af"
 GRAY, BORDER = "#313244", "#45475a"
-
-WARN_TEXT = {
-    "mixed_tokens": "מילים עבריות נקראו כרצפי אותיות/ספרות",
-    "reversed_order": "ייתכן שסדר העברית הפוך",
-    "low_confidence": "אחוז גבוה של מילים בביטחון נמוך",
-}
+ICON_FONT = ("Segoe UI Symbol", 13)
 
 
 def _corner(root_win, w, h, margin=20, taskbar=60):
@@ -149,18 +171,18 @@ def _popup(root_win, w, h):
 def _make_toast(root_win):
     global _busy
     _busy = True
-    win, inner = _popup(root_win, 370, 128)
+    win, inner = _popup(root_win, 380, 128)
 
     hdr = tk.Frame(inner, bg=DARK)
     hdr.pack(fill=tk.X, pady=(0, 4))
-    tk.Label(hdr, text="📋", bg=DARK, fg=TEXT, font=("Segoe UI Emoji", 13)).pack(side=tk.RIGHT, padx=(6, 0))
-    tk.Label(hdr, text="צילום מסך זוהה", bg=DARK, fg=TEXT,
-             font=("Segoe UI", 11, "bold"), anchor="e").pack(side=tk.RIGHT, fill=tk.X)
-    tk.Label(inner, text="האם לחלץ את הטקסט לעבודה עם קלוד?", bg=DARK, fg=SUBTLE,
-             font=("Segoe UI", 9), anchor="e", justify="right").pack(fill=tk.X, pady=(0, 10))
+    tk.Label(hdr, text="✂", bg=DARK, fg=BLUE, font=ICON_FONT).pack(side=SIDE, padx=(0, 8) if not RTL else (8, 0))
+    tk.Label(hdr, text=T["toast_title"], bg=DARK, fg=TEXT,
+             font=("Segoe UI", 11, "bold"), anchor=ANCHOR).pack(side=SIDE)
+    tk.Label(inner, text=T["toast_body"], bg=DARK, fg=SUBTLE,
+             font=("Segoe UI", 9), anchor=ANCHOR, justify=JUSTIFY).pack(fill=tk.X, pady=(0, 10))
 
     row = tk.Frame(inner, bg=DARK)
-    row.pack(anchor="e")
+    row.pack(anchor=ANCHOR)
     timer = [None]
 
     def close(yes):
@@ -176,19 +198,21 @@ def _make_toast(root_win):
         else:
             _busy = False
 
-    tk.Button(row, text="לא", width=7, bg=GRAY, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
-              relief="flat", font=("Segoe UI", 9), cursor="hand2",
-              command=lambda: close(False)).pack(side=tk.RIGHT, padx=(8, 0))
-    tk.Button(row, text="כן, חלץ טקסט", bg=BLUE, fg=DARK, activebackground="#74c7ec", activeforeground=DARK,
+    tk.Button(row, text=T["yes"], bg=BLUE, fg=DARK, activebackground="#74c7ec", activeforeground=DARK,
               relief="flat", font=("Segoe UI", 9, "bold"), cursor="hand2", padx=10,
-              command=lambda: close(True)).pack(side=tk.RIGHT)
+              command=lambda: close(True)).pack(side=SIDE)
+    tk.Button(row, text=T["no"], width=7, bg=GRAY, fg=TEXT, activebackground=BORDER, activeforeground=TEXT,
+              relief="flat", font=("Segoe UI", 9), cursor="hand2",
+              command=lambda: close(False)).pack(side=SIDE, padx=8)
     timer[0] = win.after(TOAST_MS, lambda: close(False))
 
 
 def _show_working(root_win):
-    win, inner = _popup(root_win, 370, 56)
-    tk.Label(inner, text="⏳  מחלץ טקסט, אנא המתן…", bg=DARK, fg=SUBTLE,
-             font=("Segoe UI", 9), anchor="e").pack(fill=tk.BOTH, expand=True)
+    win, inner = _popup(root_win, 380, 56)
+    row = tk.Frame(inner, bg=DARK)
+    row.pack(fill=tk.BOTH, expand=True)
+    tk.Label(row, text="⟳", bg=DARK, fg=SUBTLE, font=ICON_FONT).pack(side=SIDE, padx=(0, 8) if not RTL else (8, 0))
+    tk.Label(row, text=T["working"], bg=DARK, fg=SUBTLE, font=("Segoe UI", 9), anchor=ANCHOR).pack(side=SIDE)
     root_win._working_win = win
 
 
@@ -200,31 +224,27 @@ def _show_result(root_win, res):
         pass
 
     if res.get("started"):
-        icon, color, body, ms, h = "👁", BLUE, "ה-watcher פעיל.\nצלם מסך (Win+Shift+S) כדי לחלץ טקסט.", 4000, 80
+        icon, color, body, ms, h = "●", BLUE, T["started"], 4000, 80
     else:
         _busy = False
         if not res["ok"]:
-            icon, color, ms, h = "❌", RED, 6000, 90
-            body = "שגיאת OCR:\n" + res["msg"][:140]
+            icon, color, ms, h = "✖", RED, 6000, 90
+            body = T["error"].format(detail=res["msg"][:140])
         elif res["warnings"]:
-            names = []
-            for w in res["warnings"]:
-                code = w.split(":")[0]
-                names.append(WARN_TEXT.get(code, code))
-            icon, color, ms, h = "⚠️", AMBER, 10000, 110
-            body = ("הטקסט הועתק, אבל האיכות חשודה: " + "; ".join(names) +
-                    ".\nבדוק לפני שליחה, או צלם שוב באזור קטן/מוגדל.")
+            reasons = "; ".join(T["reasons"].get(w.split(":")[0], w.split(":")[0]) for w in res["warnings"])
+            icon, color, ms, h = "⚠", AMBER, 10000, 110
+            body = T["warning"].format(reasons=reasons)
         else:
-            icon, color, ms, h = "✅", GREEN, 5000, 80
-            engine = " (Windows OCR)" if res["engine"] == "windows" else ""
-            body = "הטקסט הועתק ללוח" + engine + "!\nהדבק עם Ctrl+V ישירות בתוך קלוד."
+            engine = T["engine_windows"] if res["engine"] == "windows" else ""
+            icon, color, ms, h = "✔", GREEN, 5000, 80
+            body = T["copied"].format(engine=engine)
 
-    win, inner = _popup(root_win, 370, h)
+    win, inner = _popup(root_win, 380, h)
     row = tk.Frame(inner, bg=DARK)
     row.pack(fill=tk.BOTH, expand=True)
-    tk.Label(row, text=icon, bg=DARK, fg=color, font=("Segoe UI Emoji", 13)).pack(side=tk.RIGHT, padx=(8, 0))
-    tk.Label(row, text=body, bg=DARK, fg=color, font=("Segoe UI", 9), anchor="e",
-             justify="right", wraplength=300).pack(side=tk.RIGHT, fill=tk.X)
+    tk.Label(row, text=icon, bg=DARK, fg=color, font=ICON_FONT).pack(side=SIDE, padx=(0, 10) if not RTL else (10, 0))
+    tk.Label(row, text=body, bg=DARK, fg=color, font=("Segoe UI", 9), anchor=ANCHOR,
+             justify=JUSTIFY, wraplength=310).pack(side=SIDE)
     win.after(ms, win.destroy)
 
 

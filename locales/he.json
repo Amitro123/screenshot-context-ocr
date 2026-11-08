@@ -1,0 +1,20 @@
+{
+  "rtl": true,
+  "toast_title": "צילום מסך זוהה",
+  "toast_body": "האם לחלץ את הטקסט לעבודה עם קלוד?",
+  "yes": "כן, חלץ טקסט",
+  "no": "לא",
+  "working": "מחלץ טקסט, אנא המתן...",
+  "started": "ה-watcher פעיל.\nצלם מסך (Win+Shift+S) כדי לחלץ טקסט.",
+  "copied": "הטקסט הועתק ללוח{engine}!\nהדבק עם Ctrl+V ישירות בתוך קלוד.",
+  "engine_windows": " (Windows OCR)",
+  "warning": "הטקסט הועתק, אבל האיכות חשודה: {reasons}.\nבדוק לפני שליחה, או צלם שוב באזור קטן/מוגדל.",
+  "error": "שגיאת OCR:\n{detail}",
+  "install_incomplete": "ההתקנה לא הושלמה. הרץ install.cmd.",
+  "timeout": "הפעולה ארכה יותר מ-120 שניות.",
+  "reasons": {
+    "mixed_tokens": "מילים עבריות נקראו כרצפי אותיות/ספרות",
+    "reversed_order": "ייתכן שסדר העברית הפוך",
+    "low_confidence": "אחוז גבוה של מילים בביטחון נמוך"
+  }
+}

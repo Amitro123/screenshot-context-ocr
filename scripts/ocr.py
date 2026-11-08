@@ -15,7 +15,7 @@ from PIL import Image, ImageGrab, ImageOps, ImageStat
 
 HEBREW = re.compile(r'[\u0590-\u05FF]')
 LATIN_OR_DIGIT = re.compile(r'[A-Za-z0-9]')
-FINAL_FORMS = '\u05da\u05dd\u05df\u05e3\u05e5'  # ך ם ן ף ץ
+FINAL_FORMS = '\u05da\u05dd\u05df\u05e3\u05e5'  # Hebrew final letter forms
 SEPARATORS = re.compile(r'[-\u05be"\'\u05f3\u05f4:/_.,;()\[\]{}<>=+*&|\\]')
 CREATE_NO_WINDOW = 0x08000000 if os.name == 'nt' else 0
 
