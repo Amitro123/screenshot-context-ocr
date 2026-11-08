@@ -165,4 +165,9 @@ Verified: the quality-gate logic and code compilation (automated), and the end-t
 Not covered by automated tests: start with Windows (`add-to-startup.cmd`).
 Please report anything unexpected on a first install.
 
+## License
+
+MIT, see [LICENSE](LICENSE). The installer downloads third-party software under its own licenses
+(Tesseract OCR: Apache-2.0, Pillow: HPND, Tesseract language data: Apache-2.0); none of it is bundled in this repository.
+
 Version 0.2.0
