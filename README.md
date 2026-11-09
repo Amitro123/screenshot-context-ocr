@@ -10,6 +10,36 @@ and the image never leaves your machine. Hebrew and English are supported.
 
 Text is lighter than an image, can be searched, and can be edited before you send it.
 
+## Why text instead of an image
+
+Claude can read an image directly, so this tool is not about making recognition better than Claude's own.
+It is about what you send and what it costs, and about being honest when the text may be wrong.
+
+**Cost.** An image is billed by its size, not by how much text is in it. Anthropic's documented
+approximation is `tokens ≈ width × height / 750`, and images whose long edge is above about 1568 px are
+scaled down first. Text is billed by length.
+
+| What you send | Rough tokens |
+|---|---|
+| Crop of 1000 × 700 px | ~930 |
+| Full 1920 × 1080 screen (scaled to ~1568 × 882) | ~1,840 |
+| A few words or a short error line, as text | tens |
+| A dense Hebrew/English screenshot of ~2,200 characters, as text | ~700-1,100 |
+
+The text rows are estimates: Hebrew is assumed at about 2-3 characters per token and English at about 4. They were
+not measured with a real tokenizer, so check the current Anthropic documentation before relying on them.
+
+What this means in practice:
+
+- A sparse screenshot (an error message, a few lines of a terminal) costs much less as text.
+- A dense, text-heavy screenshot costs about the same as text, so cost alone is not the reason to use this tool.
+- Text can be searched, copied and edited before sending, for example to remove a name or a number.
+- The image stays on your machine. OCR runs locally and nothing is uploaded.
+
+**What you give up.** OCR can make mistakes, and the image is the exact source. A screenshot with layout, colors
+or charts is better sent as an image. When the popup turns amber, the text is doubtful: check it, or paste the
+original image instead.
+
 ## How it works
 
 1. Capture a region with **Win+Shift+S**.
@@ -124,6 +154,11 @@ Reports can contain recognized text fragments; they are saved only when requeste
   harmed a large Hebrew screenshot. `--scale 1` repaired three observed errors there
   and fixed the synthetic table's `27`; it worsened the tiny terminal screenshot.
   Try `--scale 1` for large, clear text. No universal accuracy improvement is claimed.
+- **One automatic retry.** When the first pass (scale 3, psm 3) raises a quality warning,
+  OCR runs once more with scale 2 and psm 6 and keeps whichever genuine Tesseract output has
+  fewer warnings (a tie keeps the first). Nothing is corrected. The report records
+  `retry: {used, chosen}`. Skipped when you pass `--scale` or `--psm`, in `--table` mode,
+  or with `--no-retry`.
 - **Reading order is uncertain.** Mixed RTL/LTR punctuation and multi-column layouts
   may reorder content. No automatic reversal of Hebrew strings is performed.
 - **Preservation is not OCR verification.** Word/number inventory checks compare the

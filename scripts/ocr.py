@@ -1,5 +1,6 @@
 """Offline screenshot OCR. No network calls or model API calls."""
 import argparse
+import copy
 import csv
 import io
 import json
@@ -200,6 +201,33 @@ def quality_warnings(text, report):
     return out
 
 
+RETRY_SETTINGS = {'scale': 2, 'psm': 6}
+
+
+def extract_with_retry(exe, image, args, allow_retry):
+    """Normal pass; if it has warnings, one second pass (scale 2, psm 6). Keep the one with fewer warnings.
+
+    Both results are genuine Tesseract output: nothing is corrected, only chosen. Tie keeps the first.
+    """
+    text, report = extract(exe, image, args)
+    warnings = quality_warnings(text, report) if text else []
+    retry = {'used': False, 'chosen': 'first'}
+    if allow_retry and text and warnings and not getattr(args, 'table', False):
+        retry['used'] = True
+        second_args = copy.copy(args)
+        second_args.scale, second_args.psm = RETRY_SETTINGS['scale'], RETRY_SETTINGS['psm']
+        try:
+            text2, report2 = extract(exe, image, second_args)
+            warnings2 = quality_warnings(text2, report2) if text2 else None
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
+            warnings2 = None
+        if warnings2 is not None and len(warnings2) < len(warnings):
+            text, report, warnings = text2, report2, warnings2
+            retry['chosen'] = 'second'
+    report['retry'] = retry
+    return text, report, warnings
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     src = p.add_mutually_exclusive_group()
@@ -209,8 +237,8 @@ def main():
     p.add_argument('--find-engine', action='store_true')
     p.add_argument('--expected-sequence', type=int, help=argparse.SUPPRESS)
     p.add_argument('--lang', choices=['eng', 'heb', 'heb+eng', 'eng+heb'], default='heb+eng')
-    p.add_argument('--psm', type=int, choices=[3, 6, 11], default=3)
-    p.add_argument('--scale', type=int, choices=[1, 2, 3], default=3)
+    p.add_argument('--psm', type=int, choices=[3, 6, 11], default=None)  # effective default 3
+    p.add_argument('--scale', type=int, choices=[1, 2, 3], default=None)  # effective default 3
     p.add_argument('--invert', choices=['auto', 'yes', 'no'], default='auto')
     p.add_argument('--tesseract')
     p.add_argument('--tessdata')
@@ -219,7 +247,12 @@ def main():
     p.add_argument('--copy', action='store_true')
     p.add_argument('--table', action='store_true', help='Infer a simple table as TSV; fall back to raw text if ambiguous.')
     p.add_argument('--table-direction', choices=['auto', 'ltr', 'rtl'], default='auto')
+    p.add_argument('--no-retry', action='store_true',
+                   help='Do not re-run OCR with other settings (scale 2, psm 6) when the first pass has warnings.')
     args = p.parse_args()
+    allow_retry = not args.no_retry and args.scale is None and args.psm is None
+    args.scale = 3 if args.scale is None else args.scale
+    args.psm = 3 if args.psm is None else args.psm
     if not args.tessdata:
         user_tessdata = Path.home() / 'tessdata'
         if (user_tessdata / 'heb.traineddata').is_file():
@@ -255,10 +288,9 @@ def main():
         if not isinstance(image, Image.Image):
             raise ValueError('Clipboard has no image. Capture a region with Win+Shift+S first.')
 
-        text, report = extract(exe, image, args)
+        text, report, warnings = extract_with_retry(exe, image, args, allow_retry)
         if not text:
             raise ValueError('No text detected. Crop/zoom the screenshot or try --psm 6.')
-        warnings = quality_warnings(text, report)
         report['warnings'] = warnings
         report['quality_status'] = 'review_required' if warnings else 'no_issue_detected_accuracy_unverified'
         if args.out:
