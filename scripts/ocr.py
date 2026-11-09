@@ -105,7 +105,8 @@ def extract(exe, image, args):
         layout = {'status': 'not_requested', 'structure_verified': False}
         if getattr(args, 'table', False):
             text, layout = table_text(raw_text, words, args.table_direction)
-        return text, {'schema_version': 1, 'source': 'ocr', 'engine': 'tesseract',
+        return text, {'_words': words,  # consumed (popped) by extract_with_retry; never serialized
+                      'schema_version': 1, 'source': 'ocr', 'engine': 'tesseract',
                       'recognition_accuracy': 'not_verified',
                       'languages': args.lang, 'word_count': len(words), 'low_confidence_words': low,
                       'settings': {'scale': args.scale, 'psm': args.psm, 'invert': args.invert},
@@ -204,14 +205,63 @@ def quality_warnings(text, report):
 RETRY_SETTINGS = {'scale': 2, 'psm': 6}
 
 
+HEBREW_ONLY = re.compile(r'^[^A-Za-z֐-׿]*[א-ת][^A-Za-z]*$')  # Hebrew + punctuation, no Latin
+MAX_HEBREW_SWAPS = 40
+
+
+def _misread_candidate(token):
+    """Short look-alike Latin cluster (DN, ANN, Op) or Hebrew glued to digits: a likely misread Hebrew word."""
+    core = token.strip('.,:;!?()"\'')
+    return is_noise_token(core) or bool(HEBREW.search(core) and re.search(r'\d', core))
+
+
+def hebrew_second_opinion(exe, image, args, text, words):
+    """Re-read the page with `-l heb` only (same scale/psm) and, for each suspicious token, take the Hebrew-only
+    reading of the same box ONLY when it is pure Hebrew and has higher Tesseract confidence.
+
+    Both readings are genuine Tesseract output: tokens are chosen, never edited or mapped. English/code tokens
+    that do not look like a misread are never touched. Returns (new_text, candidates, replaced).
+    """
+    heb_args = copy.copy(args)
+    heb_args.lang = 'heb'
+    _, report = extract(exe, image, heb_args)
+    heb_words = [dict(w, text=clean(w['text']).strip()) for w in report.pop('_words', [])]
+    swaps, candidates = [], 0
+    for w in words:
+        token = clean(w['text']).strip()
+        if not token or not _misread_candidate(token):
+            continue
+        candidates += 1
+        x, y, width, height = (int(w[k]) for k in ('left', 'top', 'width', 'height'))
+        overlap = [h for h in heb_words
+                   if int(h['left']) < x + width and int(h['left']) + int(h['width']) > x
+                   and abs(int(h['top']) + int(h['height']) / 2 - (y + height / 2)) < height * 0.5]
+        if overlap and all(HEBREW_ONLY.match(h['text']) for h in overlap) \
+                and sum(float(h['conf']) for h in overlap) / len(overlap) > float(w['conf']):
+            swaps.append((token, ' '.join(h['text'] for h in overlap)))
+        if len(swaps) >= MAX_HEBREW_SWAPS:
+            break
+    pieces, pos = [], 0
+    for old, new in swaps:
+        i = text.find(old, pos)
+        if i >= 0:
+            pieces += [text[pos:i], new]
+            pos = i + len(old)
+    pieces.append(text[pos:])
+    return ''.join(pieces), candidates, len(swaps)
+
+
 def extract_with_retry(exe, image, args, allow_retry):
     """Normal pass; if it has warnings, one second pass (scale 2, psm 6). Keep the one with fewer warnings.
 
-    Both results are genuine Tesseract output: nothing is corrected, only chosen. Tie keeps the first.
+    If `mixed_tokens` remains on a heb+eng read, one more `-l heb` pass supplies a second opinion for the
+    suspicious tokens (see hebrew_second_opinion). All results are genuine Tesseract output: nothing is
+    corrected, only chosen. Tie keeps the first. Everything extra is skipped when allow_retry is False.
     """
     text, report = extract(exe, image, args)
     warnings = quality_warnings(text, report) if text else []
     retry = {'used': False, 'chosen': 'first'}
+    used_args = args
     if allow_retry and text and warnings and not getattr(args, 'table', False):
         retry['used'] = True
         second_args = copy.copy(args)
@@ -223,7 +273,21 @@ def extract_with_retry(exe, image, args, allow_retry):
             warnings2 = None
         if warnings2 is not None and len(warnings2) < len(warnings):
             text, report, warnings = text2, report2, warnings2
+            used_args = second_args
             retry['chosen'] = 'second'
+        words = report.get('_words')
+        if (words and any(w.startswith('mixed_tokens') for w in warnings)
+                and 'heb' in args.lang and args.lang != 'heb' and 'eng' in args.lang):
+            try:
+                new_text, candidates, replaced = hebrew_second_opinion(exe, image, used_args, text, words)
+            except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
+                new_text, candidates, replaced = text, 0, 0
+            retry['hebrew_pass'] = {'candidates': candidates, 'replaced': replaced}
+            if replaced:
+                text = new_text
+                report['checks'] = {'hebrew': hebrew_check(text), 'preservation': preservation(text, text)}
+                warnings = quality_warnings(text, report)
+    report.pop('_words', None)
     report['retry'] = retry
     return text, report, warnings
 

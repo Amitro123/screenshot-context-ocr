@@ -83,5 +83,54 @@ class RetryTests(unittest.TestCase):
             self.assertEqual(seen[-1], expected, extra)
 
 
+def word(text, conf, left, top=10, width=40, height=20):
+    return {'text': text, 'conf': str(conf), 'left': str(left), 'top': str(top),
+            'width': str(width), 'height': str(height)}
+
+
+class HebrewSecondOpinionTests(unittest.TestCase):
+    LATIN = [word('DN', 78, 0), word('cli.py', 90, 100), word('NN', 95, 200), word('ON', 80, 300)]
+    HEB = [word('אם', 93, 2), word('קלי', 40, 100),
+           word('ממנו', 91, 201), word('Latin', 99, 300)]
+
+    def run_pass(self, allow=True, warnings=('mixed_tokens:3',), lang='heb+eng'):
+        calls = []
+
+        def fake_extract(exe, image, a):
+            calls.append(a.lang)
+            words = self.HEB if a.lang == 'heb' else self.LATIN
+            return 'DN cli.py NN ON', {'_words': list(words), 'word_count': 4, 'low_confidence_words': []}
+
+        with patch.object(ocr, 'extract', fake_extract), \
+                patch.object(ocr, 'quality_warnings', lambda t, r: list(warnings) if t.startswith('DN') else []):
+            out = ocr.extract_with_retry('tess', Image.new('RGB', (4, 4)), args(lang=lang), allow)
+        return out, calls
+
+    def test_swaps_only_suspicious_tokens_with_higher_pure_hebrew_confidence(self):
+        (text, report, warnings), calls = self.run_pass()
+        # DN -> Hebrew (93 > 78); cli.py not a candidate; NN -> Hebrew (91 < 95, kept); ON -> Latin overlap, kept
+        self.assertEqual(text, 'אם cli.py NN ON')
+        self.assertEqual(report['retry']['hebrew_pass'], {'candidates': 3, 'replaced': 1})
+        self.assertNotIn('_words', report)
+        self.assertEqual(warnings, [])
+
+    def test_no_retry_disables_hebrew_pass(self):
+        (text, report, _), calls = self.run_pass(allow=False)
+        self.assertEqual(calls, ['heb+eng'])
+        self.assertEqual(text, 'DN cli.py NN ON')
+        self.assertNotIn('hebrew_pass', report['retry'])
+        self.assertNotIn('_words', report)
+
+    def test_no_mixed_tokens_warning_no_hebrew_pass(self):
+        (_, report, _), calls = self.run_pass(warnings=('midword_final',))
+        self.assertNotIn('heb', calls)
+        self.assertNotIn('hebrew_pass', report['retry'])
+
+    def test_english_only_or_hebrew_only_lang_skips_hebrew_pass(self):
+        for lang in ('heb', 'eng'):
+            (_, report, _), calls = self.run_pass(lang=lang)
+            self.assertNotIn('hebrew_pass', report['retry'], lang)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -159,6 +159,12 @@ Reports can contain recognized text fragments; they are saved only when requeste
   fewer warnings (a tie keeps the first). Nothing is corrected. The report records
   `retry: {used, chosen}`. Skipped when you pass `--scale` or `--psm`, in `--table` mode,
   or with `--no-retry`.
+- **Hebrew second opinion.** If `mixed_tokens` remains on a `heb+eng` read, one extra `-l heb`
+  pass re-reads the page. Only short look-alike Latin clusters (e.g. `DN`, `ANN`, `Op`) or
+  Hebrew glued to digits are swapped, and only for a pure-Hebrew word at the same box with
+  higher Tesseract confidence (at most 40). Tokens are chosen between two genuine outputs,
+  never edited; the report adds `retry.hebrew_pass: {candidates, replaced}`. Hebrew words
+  read as longer Latin words (e.g. `non`) and glued prefixes (`tracesn`) are not fixed.
 - **Reading order is uncertain.** Mixed RTL/LTR punctuation and multi-column layouts
   may reorder content. No automatic reversal of Hebrew strings is performed.
 - **Preservation is not OCR verification.** Word/number inventory checks compare the
