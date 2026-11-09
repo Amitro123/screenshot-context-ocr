@@ -7,6 +7,7 @@ param([switch]$Startup, [switch]$NoStart)
 $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
+. (Join-Path $Root 'scripts\model-data.ps1')
 
 function Step($m) { Write-Host ""; Write-Host "==> $m" -ForegroundColor Cyan }
 function Good($m) { Write-Host "    OK: $m" -ForegroundColor Green }
@@ -23,13 +24,10 @@ function Retry([scriptblock]$Action, [string]$What, [int]$Times = 3) {
 }
 
 function Find-Tesseract {
-    $candidates = @(
-        (Get-Command tesseract -ErrorAction SilentlyContinue | ForEach-Object { $_.Source }),
-        "$env:ProgramFiles\Tesseract-OCR\tesseract.exe",
-        "${env:ProgramFiles(x86)}\Tesseract-OCR\tesseract.exe",
-        "$env:LOCALAPPDATA\Programs\Tesseract-OCR\tesseract.exe"
-    )
-    $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+    try {
+        $found = & $venvPython (Join-Path $Root 'scripts\ocr.py') --find-engine 2>$null
+        if ($LASTEXITCODE -eq 0) { return $found }
+    } catch { return $null }
 }
 
 # 1. Python ------------------------------------------------------------------
@@ -77,16 +75,7 @@ foreach ($name in 'eng.traineddata', 'osd.traineddata') {
     if ((Test-Path $src) -and -not (Test-Path $dst)) { Copy-Item $src $dst }
 }
 $heb = Join-Path $tessdata 'heb.traineddata'
-# tessdata_best heb.traineddata is ~3.7 MB; the less accurate "fast" variant is much smaller.
-$hebMinBytes = 3000000
-$hebOk = (Test-Path $heb) -and ((Get-Item $heb).Length -gt $hebMinBytes)
-if (-not $hebOk) {
-    if (Test-Path $heb) { Write-Host "    Replacing the small 'fast' Hebrew model with the more accurate 'best' model..." }
-    Retry {
-        Invoke-WebRequest -UseBasicParsing 'https://github.com/tesseract-ocr/tessdata_best/raw/main/heb.traineddata' -OutFile $heb
-        if ((Get-Item $heb).Length -lt $hebMinBytes) { throw 'downloaded file is too small' }
-    } 'Hebrew model download'
-}
+Retry { Install-HebrewModel $heb } 'Hebrew model download'
 Good "language data in $tessdata"
 
 # 5. Verify ---------------------------------------------------------------------

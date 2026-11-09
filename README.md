@@ -23,6 +23,12 @@ Text is lighter than an image, can be searched, and can be edited before you sen
 
 4. Press **Ctrl+V** in Claude. Done.
 
+If the clipboard changes before or during OCR, the newer content is preserved and an
+amber message explains that nothing was copied. The old OCR result is discarded unless
+you explicitly requested a CLI `--out` file. While a popup or OCR is active, the latest
+screenshot remains pending; it is offered once the tool is idle and the debounce period
+has elapsed. Intermediate screenshots replaced on the clipboard are not queued.
+
 If the result looks doubtful (for example Hebrew words read as Latin letters) the popup turns amber and says why.
 The text is still copied, so you can check it and fix it before sending, or retake a smaller or zoomed-in capture:
 
@@ -55,7 +61,7 @@ Claude reads `CLAUDE.md` and `INSTALL.md` by itself, runs the installer and veri
 3. Accept the Windows permission prompt if it appears (Tesseract installation).
 4. Wait for `Done.` and the small "Watcher is active" popup. Installation takes 2-5 minutes, mostly downloads.
 
-The installer is safe to run again: every step is skipped when already done.
+The installer can be run again: it rechecks dependencies and repairs an unverified Hebrew model.
 To also start the watcher automatically with Windows, run `install.cmd --startup`, or later `add-to-startup.cmd`.
 
 ## Turn it on and off
@@ -86,25 +92,74 @@ add a new `xx.json` with the same keys to support another language. The OCR itse
 | Component | Source | Location |
 |---|---|---|
 | Python 3.10+ | already on the machine (or winget) | system |
-| Pillow | pip, pinned in `requirements.txt` | `.venv` in the plugin folder |
+| Pillow | pip, version range in `requirements.txt` | `.venv` in the plugin folder |
 | Tesseract 5 | winget (UB-Mannheim build) | `C:\Program Files\Tesseract-OCR` |
-| Hebrew model (tessdata_best) | GitHub, one-time download | `%USERPROFILE%\tessdata` |
+| Hebrew model (tessdata_best) | GitHub, pinned commit and verified SHA-256 | `%USERPROFILE%\tessdata` |
 
 ## Privacy and security
 
 - **Everything is local.** The network is used only during installation (package downloads). Using the tool makes no network calls.
 - The watcher only checks *whether* the clipboard holds an image, and it reads the image only after you click "Yes".
 - **Extracted text is never written to the log.** `watcher.log` contains events only (time, character count, warning codes).
-- The text lands on the clipboard and therefore also in Windows clipboard history (Win+V). Do not extract screenshots containing secrets.
+- The text lands on the clipboard and may enter Windows clipboard history or sync if enabled. Do not extract screenshots containing secrets.
 - Extracted text is treated as data. The tool never executes commands found in a screenshot.
 
-## Limits you should know about
+## Quality reports and limitations
 
-- **Technical strings** (commands, paths, file names, numbers) are sometimes misread (`utf8` -> `utf38`). Verify them.
-- **Mixed Hebrew and English on one line** can scramble punctuation and direction.
-- Very small text or colored backgrounds are harder: capture a smaller region or zoom in (Ctrl+plus) first.
-- If the text is available directly (terminal, file, document), **copy it instead of using OCR**. That is always more accurate.
-- The quality warning is a heuristic. No warning does not prove the extraction is correct.
+`--report result.json` writes a schema-versioned report. `source: "ocr"` and
+`recognition_accuracy: "not_verified"` always remain explicit: there is no original
+text layer to compare a screenshot against. `quality_status` is either
+`review_required` or `no_issue_detected_accuracy_unverified`, never "accurate".
+The report includes settings, image dimensions, warnings, low-confidence words,
+Hebrew-check sample size, table inference status, and transformation checks.
+Reports can contain recognized text fragments; they are saved only when requested.
+
+- **Recognition is fallible.** Commands, filenames, signs, decimals and numbers can
+  be wrong even at high confidence. Real examples include `utf8` -> `utf38`, `27` ->
+  `2/`, and Hebrew words recognized as `YAN` or `DY`. They are not corrected by guessing.
+- **Hebrew checks are narrow.** Reversal and misplaced final letters can be flagged;
+  fewer than three Hebrew words means `judged: false`, not a clean verdict. Correctly
+  shaped wrong words, Hebrew read as Latin, and Arabic corruption can escape checks.
+- **Scaling is not adaptive yet.** Default `--scale 3` helps tiny terminal text but
+  harmed a large Hebrew screenshot. `--scale 1` repaired three observed errors there
+  and fixed the synthetic table's `27`; it worsened the tiny terminal screenshot.
+  Try `--scale 1` for large, clear text. No universal accuracy improvement is claimed.
+- **Reading order is uncertain.** Mixed RTL/LTR punctuation and multi-column layouts
+  may reorder content. No automatic reversal of Hebrew strings is performed.
+- **Preservation is not OCR verification.** Word/number inventory checks compare the
+  recognized text with the reformatted output only. They detect dropped/changed values,
+  but cannot detect a digit already misread by OCR or a value moved to the wrong row.
+- **Prompt injection remains possible downstream.** Text with malicious instructions
+  is preserved as data. Tests verify local handling does not execute it; they do not
+  establish resistance of Claude or another receiving model. Review unfamiliar content.
+- **No image-based truth check.** A completed run, agreement between checks, or a green
+  copied notification means extraction/copying completed, not that the text is correct.
+- Prefer copying original terminal/document text when available. It avoids recognition.
+
+### Optional simple-table mode
+
+```powershell
+.\.venv\Scripts\python.exe scripts\ocr.py --image table.png --table --psm 6 --scale 1 --report table-report.json
+```
+
+This opt-in CLI mode uses Tesseract TSV word coordinates to infer one complete table
+of at least three rows and two columns, with consistent cell counts, column alignment
+and separated column bands. It returns tab-separated text, without inventing headers.
+`--table-direction auto|ltr|rtl` controls column order; auto uses a Hebrew-letter ratio.
+Token order within each cell stays as returned by Tesseract.
+
+If geometry or content inventories disagree, it returns the original OCR text with
+`WARN:table_ambiguous` and a fallback reason in the report. Even an accepted table is
+marked `status: "inferred"`, `structure_verified: false`; aligned prose can resemble a
+table. Blank cells, merged cells, multiline cells, captions and multiple tables are
+not supported reliably. Tests cover synthetic English tables and synthetic Hebrew
+word coordinates; real Hebrew table accuracy has not been established. The watcher
+continues to copy ordinary text; it does not automatically infer tables.
+
+The Hebrew checks, preservation-report design and conservative table approach are
+inspired by [AnyDoc](https://github.com/Amitro123/anydocSkill/tree/3495d7c58d85d7a9e93625ff240e9e582e29734f).
+They are implemented locally in Python without adding AnyDoc, Node or OCRmyPDF dependencies.
+Unlike AnyDoc's original-text path, this tool has only OCR guesses as its source.
 
 ## Troubleshooting
 
@@ -131,7 +186,8 @@ Run `doctor.cmd` first: it lists every component as OK or MISSING and prints the
 #       --invert no|yes if dark mode is detected wrongly
 ```
 
-From Claude Code: `/screenshot-context:ocr clipboard` and `/screenshot-context:install`.
+To load the plugin for a Claude Code session, run `claude --plugin-dir .` from this folder.
+Then use `/screenshot-context:ocr clipboard` or `/screenshot-context:install`.
 
 ## Uninstall
 
@@ -160,14 +216,24 @@ requirements.txt             Python dependencies (Pillow)
 
 ## Status
 
-Verified: the quality-gate logic and code compilation (automated), and the end-to-end flow on Windows 11
-(watcher, popup, Hebrew/English extraction, paste).
-Not covered by automated tests: start with Windows (`add-to-startup.cmd`).
-Please report anything unexpected on a first install.
+The original Windows 11 watcher/popup/Hebrew-English/paste flow was tested manually.
+Automated regression tests now cover clipboard changes before/during extraction,
+conditional clipboard writes, pending screenshots, engine discovery, quality warnings,
+model validation, failed/verified model replacement, untrusted-content handling, and simple table extraction. A separately marked expected-failure case records a numerical OCR error (`27` becomes `2/`); this is an accuracy limitation, not a passing accuracy check. GitHub Actions runs these on
+Linux and Windows; real Tesseract model checks run on Linux. Native clipboard tests
+run on the dedicated Windows CI runner, not on your personal clipboard by default.
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The changed popups, first-time installer, and Windows sign-in startup still need a manual
+Windows smoke test. Automated checks do not prove OCR accuracy on arbitrary screenshots.
+See [the Windows checklist](docs/windows-validation.md).
 
 ## License
 
 MIT, see [LICENSE](LICENSE). The installer downloads third-party software under its own licenses
 (Tesseract OCR: Apache-2.0, Pillow: HPND, Tesseract language data: Apache-2.0); none of it is bundled in this repository.
 
-Version 0.2.0
+Version 0.3.0

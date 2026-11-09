@@ -1,5 +1,6 @@
 # Health check: prints what is installed, what is missing and the single next step.
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+. (Join-Path $Root 'scripts\model-data.ps1')
 $bad = 0
 function Row($ok, $name, $detail) {
     if ($ok) { Write-Host ("[ OK ]   {0,-22} {1}" -f $name, $detail) -ForegroundColor Green }
@@ -18,14 +19,16 @@ if ($haveVenv) {
     Row ($LASTEXITCODE -eq 0) 'Pillow' ($(if ($LASTEXITCODE -eq 0) { 'importable' } else { 'run install.cmd' }))
 }
 
-$tess = @("$env:ProgramFiles\Tesseract-OCR\tesseract.exe", "$env:LOCALAPPDATA\Programs\Tesseract-OCR\tesseract.exe") |
-    Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $tess) { $c = Get-Command tesseract -ErrorAction SilentlyContinue; if ($c) { $tess = $c.Source } }
+$tess = $null
+if ($haveVenv) {
+    $found = & $venv (Join-Path $Root 'scripts\ocr.py') --find-engine 2>$null
+    if ($LASTEXITCODE -eq 0) { $tess = $found }
+}
 Row ([bool]$tess) 'Tesseract' ($(if ($tess) { $tess } else { 'run install.cmd' }))
 
 $heb = Join-Path $env:USERPROFILE 'tessdata\heb.traineddata'
-$hebOk = (Test-Path $heb) -and ((Get-Item $heb).Length -gt 3000000)
-$hebHint = if (Test-Path $heb) { 'small "fast" model (less accurate) - run install.cmd to upgrade' } else { 'run install.cmd' }
+$hebOk = Test-ModelHash $heb (Get-HebrewModelSpec).Sha256
+$hebHint = if (Test-Path $heb) { 'unverified or damaged model - run install.cmd to repair' } else { 'run install.cmd' }
 Row $hebOk 'Hebrew language data' ($(if ($hebOk) { $heb } else { $hebHint }))
 
 if ($haveVenv -and $tess) {

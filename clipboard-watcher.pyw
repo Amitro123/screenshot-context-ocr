@@ -22,6 +22,7 @@ import threading
 import time
 from pathlib import Path
 import tkinter as tk
+from scripts.clipboard_win import ClipboardPoller, WindowsClipboard
 
 # -- Paths -------------------------------------------------------------------
 
@@ -74,15 +75,14 @@ JUSTIFY = "right" if RTL else "left"
 
 # -- Shared state ------------------------------------------------------------
 
-_actions = queue.Queue()   # watcher thread -> UI
 _results = queue.Queue()   # OCR thread -> UI: dict
-_last_toast_time = 0.0
 _busy = False
-_get_seq = ctypes.windll.user32.GetClipboardSequenceNumber
+_clipboard = None
+_poller = None
 
 # -- OCR (background thread) ----------------------------------------------------
 
-def _run_ocr_bg():
+def _run_ocr_bg(sequence):
     result = {"ok": False, "msg": "", "warnings": []}
     if not PYTHON.exists() or not OCR_SCRIPT.exists():
         result["msg"] = T["install_incomplete"]
@@ -90,10 +90,12 @@ def _run_ocr_bg():
         return
     try:
         r = subprocess.run(
-            [str(PYTHON), str(OCR_SCRIPT), "--clipboard", "--copy"],
+            [str(PYTHON), str(OCR_SCRIPT), "--clipboard", "--copy",
+             "--expected-sequence", str(sequence)],
             capture_output=True, timeout=120, creationflags=CREATE_NO_WINDOW)
         err = r.stderr.decode("utf-8", errors="replace")
         result["ok"] = r.returncode == 0
+        result["changed"] = r.returncode == 3
         if result["ok"]:
             for line in err.splitlines():
                 if line.startswith("WARN:"):
@@ -109,38 +111,6 @@ def _run_ocr_bg():
         result["msg"] = str(e)
         _log(f"ocr exception: {e!r}")
     _results.put(result)
-
-# -- Clipboard watcher (background thread) ------------------------------------------
-
-def _watch():
-    global _last_toast_time
-    from PIL import Image, ImageGrab
-    last_seq = _get_seq()
-    _log("watcher started")
-    while True:
-        time.sleep(POLL_MS / 1000)
-        try:
-            seq = _get_seq()
-            if seq == last_seq:
-                continue
-            last_seq = seq
-            now = time.time()
-            if _busy or (now - _last_toast_time) < DEBOUNCE_S:
-                continue
-            img = None
-            for _ in range(8):  # Snipping Tool may hold the clipboard briefly
-                try:
-                    img = ImageGrab.grabclipboard()
-                except Exception:
-                    img = None
-                if isinstance(img, Image.Image):
-                    break
-                time.sleep(0.25)
-            if isinstance(img, Image.Image):
-                _last_toast_time = time.time()
-                _actions.put("toast")
-        except Exception as e:
-            _log(f"watcher error: {e!r}")
 
 # -- UI -----------------------------------------------------------------------------
 
@@ -166,7 +136,7 @@ def _popup(root_win, w, h):
     return win, inner
 
 
-def _make_toast(root_win):
+def _make_toast(root_win, sequence):
     global _busy
     _busy = True
     win, inner = _popup(root_win, 380, 128)
@@ -191,8 +161,8 @@ def _make_toast(root_win):
             pass
         win.destroy()
         if yes:
-            threading.Thread(target=_run_ocr_bg, daemon=True).start()
-            root_win.after(50, lambda: _show_working(root_win))
+            _show_working(root_win)
+            threading.Thread(target=_run_ocr_bg, args=(sequence,), daemon=True).start()
         else:
             _busy = False
 
@@ -225,7 +195,10 @@ def _show_result(root_win, res):
         icon, color, body, ms, h = "●", BLUE, T["started"], 4000, 80
     else:
         _busy = False
-        if not res["ok"]:
+        if res.get("changed"):
+            icon, color, ms, h = "⚠", AMBER, 8000, 110
+            body = T["clipboard_changed"]
+        elif not res["ok"]:
             icon, color, ms, h = "✖", RED, 6000, 90
             body = T["error"].format(detail=res["msg"][:140])
         elif res["warnings"]:
@@ -248,19 +221,20 @@ def _show_result(root_win, res):
 def _pump(root_win):
     try:
         while True:
-            if _actions.get_nowait() == "toast":
-                _make_toast(root_win)
-    except queue.Empty:
-        pass
-    try:
-        while True:
             _show_result(root_win, _results.get_nowait())
     except queue.Empty:
         pass
+    try:
+        sequence = _poller.poll(_clipboard, _busy, time.monotonic())
+        if sequence is not None:
+            _make_toast(root_win, sequence)
+    except Exception as exc:
+        _log(f"watcher error: {exc!r}")
     root_win.after(POLL_MS, lambda: _pump(root_win))
 
 
 def main():
+    global _clipboard, _poller
     # Single instance: a second launch exits quietly.
     mutex = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\ScreenshotContextWatcher")
     if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
@@ -269,7 +243,9 @@ def main():
     root = tk.Tk()
     root.withdraw()
     root.title("Screenshot Context Watcher")
-    threading.Thread(target=_watch, daemon=True).start()
+    _clipboard = WindowsClipboard()
+    _poller = ClipboardPoller(_clipboard.sequence(), DEBOUNCE_S)
+    _log("watcher started")
     _results.put({"started": True})
     root.after(POLL_MS, lambda: _pump(root))
     root.mainloop()

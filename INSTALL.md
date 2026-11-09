@@ -19,7 +19,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File ".\scripts\setup.ps1"
 Add `-Startup` if the user wants the watcher to start with Windows. Add `-NoStart` to skip launching it.
 The script: creates `.venv`, installs Pillow (retries on transient 403), installs Tesseract through
 `winget` if missing (Windows may show a permission prompt - tell the user to accept it), downloads the
-Hebrew model into `%USERPROFILE%\tessdata`, runs `scripts\ocr.py --check`, then starts the watcher.
+checksum-verified Hebrew model into `%USERPROFILE%\tessdata`, runs `scripts\ocr.py --check`, then starts the watcher.
 
 ## Success criteria
 
@@ -33,7 +33,7 @@ Hebrew model into `%USERPROFILE%\tessdata`, runs `scripts\ocr.py --check`, then 
 | `Python was just installed` | Ask the user to open a new window and run `install.cmd` again. |
 | `winget` missing | Ask the user to install Tesseract from https://github.com/UB-Mannheim/tesseract/wiki, then re-run. |
 | HTTP 403 on pip / download | Corporate proxy. Re-run once (often transient). If it persists, ask IT for an internal PyPI mirror or have the user download `heb.traineddata` in a browser into `%USERPROFILE%\tessdata`. |
-| `Missing OCR languages: heb` | `%USERPROFILE%\tessdata\heb.traineddata` is missing or < 1 MB - re-run the installer. |
+| `Missing OCR languages: heb` | The Hebrew model is missing or invalid - re-run the installer to verify and repair it. |
 | No popup after a screenshot | Run `.\.venv\Scripts\python.exe clipboard-watcher.pyw` in a terminal, screenshot again, read `watcher.log`. |
 
 ## Control

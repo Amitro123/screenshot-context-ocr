@@ -14,6 +14,9 @@
   "reasons": {
     "mixed_tokens": "Hebrew words read as Latin letters or digits",
     "reversed_order": "Hebrew word order may be reversed",
-    "low_confidence": "many low-confidence words"
-  }
+    "low_confidence": "many low-confidence words",
+    "midword_final": "Hebrew final letters appear inside words",
+    "table_ambiguous": "table structure is ambiguous; raw text was kept"
+  },
+  "clipboard_changed": "Clipboard changed. Your newer content was preserved.\nConfirm the latest screenshot or capture it again."
 }

@@ -10,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from PIL import Image, ImageGrab, ImageOps, ImageStat
+from PIL import Image, ImageDraw, ImageGrab, ImageOps, ImageStat
+from clipboard_win import ClipboardChanged, WindowsClipboard, read_image
+from output_checks import hebrew_check, preservation, table_text
 
 HEBREW = re.compile(r'[\u0590-\u05FF]')
 LATIN_OR_DIGIT = re.compile(r'[A-Za-z0-9]')
@@ -27,12 +29,33 @@ def run(command, timeout=90):
 
 
 def engine(explicit=None):
-    candidate = explicit or shutil.which('tesseract')
-    if not candidate and os.name == 'nt':
-        candidate = str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Tesseract-OCR/tesseract.exe')
-    if not candidate or not Path(candidate).is_file():
-        raise RuntimeError('Install Tesseract 5 with eng and heb language data, or pass --tesseract PATH.')
-    return candidate
+    if explicit:
+        candidates = [explicit]
+    else:
+        candidates = [shutil.which('tesseract')]
+        for key, suffix in [('ProgramFiles', 'Tesseract-OCR'),
+                            ('ProgramFiles(x86)', 'Tesseract-OCR'),
+                            ('LOCALAPPDATA', 'Programs/Tesseract-OCR')]:
+            if os.environ.get(key):
+                candidates.append(str(Path(os.environ[key]) / suffix / 'tesseract.exe'))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+    raise RuntimeError('Install Tesseract 5 with eng and heb language data, or pass --tesseract PATH.')
+
+
+def check_models(exe, langs, tessdata=None):
+    """Load each requested model separately; a valid English model cannot hide broken Hebrew."""
+    with tempfile.TemporaryDirectory(prefix='ocr-check-') as tmp:
+        source = Path(tmp) / 'probe.png'
+        probe = Image.new('RGB', (300, 80), 'white')
+        ImageDraw.Draw(probe).text((10, 20), 'OCR model load check 123', fill='black')
+        probe.save(source)
+        for lang in langs.split('+'):
+            cmd = [exe, str(source), 'stdout', '-l', lang, '--oem', '1', '--psm', '6']
+            if tessdata:
+                cmd += ['--tessdata-dir', tessdata]
+            run(cmd)
 
 
 def check_languages(exe, langs, tessdata=None):
@@ -77,8 +100,18 @@ def extract(exe, image, args):
         rows = list(csv.DictReader(io.StringIO(base.with_suffix('.tsv').read_text(encoding='utf-8')), delimiter='\t'))
         words = [r for r in rows if r.get('level') == '5' and r.get('text', '').strip()]
         low = [{'text': r['text'], 'confidence': float(r['conf'])} for r in words if float(r['conf']) < 60]
-        return text, {'languages': args.lang, 'word_count': len(words), 'low_confidence_words': low,
-                      'note': 'Confidence is not correctness. Verify commands, paths, numbers and mixed RTL/LTR text.'}
+        raw_text = text
+        layout = {'status': 'not_requested', 'structure_verified': False}
+        if getattr(args, 'table', False):
+            text, layout = table_text(raw_text, words, args.table_direction)
+        return text, {'schema_version': 1, 'source': 'ocr', 'engine': 'tesseract',
+                      'recognition_accuracy': 'not_verified',
+                      'languages': args.lang, 'word_count': len(words), 'low_confidence_words': low,
+                      'settings': {'scale': args.scale, 'psm': args.psm, 'invert': args.invert},
+                      'image_size': list(image.size), 'table': layout,
+                      'checks': {'hebrew': hebrew_check(raw_text),
+                                 'preservation': preservation(raw_text, text)},
+                      'note': 'Heuristics and output preservation are not verification against the image.'}
 
 
 # ---------------------------------------------------------------- quality gate
@@ -155,25 +188,16 @@ def quality_warnings(text, report):
         out.append(f"mixed_tokens:{s['mixed']}")
     if s['final_start'] >= 3 and s['final_start'] > s['final_end']:
         out.append('reversed_order')
+    script = hebrew_check(text)
+    if script['suspicious_midword']:
+        out.append('midword_final')
+    if report.get('table', {}).get('status') == 'fallback':
+        out.append('table_ambiguous')
     words = report.get('word_count', 0)
     low = len(report.get('low_confidence_words', []))
     if words >= 10 and low / words > 0.25:
         out.append(f'low_confidence:{round(100 * low / words)}%')
     return out
-
-
-def copy_text(text):
-    if os.name != 'nt':
-        raise RuntimeError('--copy is currently supported on native Windows only; use --out elsewhere.')
-    # Pass text through a temporary UTF-8 file, never as executable PowerShell code.
-    with tempfile.TemporaryDirectory(prefix='ocr-copy-') as tmp:
-        path = Path(tmp) / 'text.txt'
-        path.write_text(text, encoding='utf-8')
-        env = os.environ.copy()
-        env['SCREENSHOT_OCR_COPY_FILE'] = str(path)
-        subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
-                        "$ErrorActionPreference='Stop'; Set-Clipboard -Value ([IO.File]::ReadAllText($env:SCREENSHOT_OCR_COPY_FILE, [Text.Encoding]::UTF8))"],
-                       env=env, check=True, capture_output=True, timeout=20, creationflags=CREATE_NO_WINDOW)
 
 
 def main():
@@ -182,6 +206,8 @@ def main():
     src.add_argument('--image', type=Path)
     src.add_argument('--clipboard', action='store_true')
     p.add_argument('--check', action='store_true')
+    p.add_argument('--find-engine', action='store_true')
+    p.add_argument('--expected-sequence', type=int, help=argparse.SUPPRESS)
     p.add_argument('--lang', choices=['eng', 'heb', 'heb+eng', 'eng+heb'], default='heb+eng')
     p.add_argument('--psm', type=int, choices=[3, 6, 11], default=3)
     p.add_argument('--scale', type=int, choices=[1, 2, 3], default=3)
@@ -191,6 +217,8 @@ def main():
     p.add_argument('--out', type=Path)
     p.add_argument('--report', type=Path)
     p.add_argument('--copy', action='store_true')
+    p.add_argument('--table', action='store_true', help='Infer a simple table as TSV; fall back to raw text if ambiguous.')
+    p.add_argument('--table-direction', choices=['auto', 'ltr', 'rtl'], default='auto')
     args = p.parse_args()
     if not args.tessdata:
         user_tessdata = Path.home() / 'tessdata'
@@ -198,8 +226,12 @@ def main():
             args.tessdata = str(user_tessdata)
     try:
         exe = engine(args.tesseract)
+        if args.find_engine:
+            print(exe)
+            return 0
         check_languages(exe, args.lang, args.tessdata)
         if args.check:
+            check_models(exe, args.lang, args.tessdata)
             print('OK: Tesseract and requested languages available.')
             return 0
         if not args.image and not args.clipboard:
@@ -209,7 +241,17 @@ def main():
                 raise ValueError('Refusing to overwrite: ' + str(output))
         if args.out and args.report and args.out.resolve() == args.report.resolve():
             raise ValueError('--out and --report must differ.')
-        image = Image.open(args.image) if args.image else ImageGrab.grabclipboard()
+        if args.expected_sequence is not None and not args.clipboard:
+            p.error('--expected-sequence requires --clipboard.')
+        clipboard = WindowsClipboard() if args.copy or (args.clipboard and os.name == 'nt') else None
+        sequence = clipboard.sequence() if clipboard else None
+        if args.image:
+            with Image.open(args.image) as opened:
+                image = opened.copy()
+        elif clipboard:
+            image, sequence = read_image(clipboard, ImageGrab.grabclipboard, args.expected_sequence)
+        else:
+            image = ImageGrab.grabclipboard()
         if not isinstance(image, Image.Image):
             raise ValueError('Clipboard has no image. Capture a region with Win+Shift+S first.')
 
@@ -217,12 +259,14 @@ def main():
         if not text:
             raise ValueError('No text detected. Crop/zoom the screenshot or try --psm 6.')
         warnings = quality_warnings(text, report)
+        report['warnings'] = warnings
+        report['quality_status'] = 'review_required' if warnings else 'no_issue_detected_accuracy_unverified'
         if args.out:
             args.out.write_text(text + '\n', encoding='utf-8')
         if args.report:
             args.report.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding='utf-8')
         if args.copy:
-            copy_text(text)
+            clipboard.copy_text(text, sequence)
         if hasattr(sys.stdout, 'reconfigure'):
             sys.stdout.reconfigure(encoding='utf-8')
         print(text)
@@ -230,6 +274,9 @@ def main():
             print('WARN:' + warning, file=sys.stderr)
         print(f"OCR: {report['word_count']} words; {len(report['low_confidence_words'])} below confidence 60. Verify technical literals.", file=sys.stderr)
         return 0
+    except ClipboardChanged as exc:
+        print('CLIPBOARD_CHANGED:' + str(exc), file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         print('OCR error: ' + str(exc), file=sys.stderr)
         return 1
