@@ -91,7 +91,7 @@ def word(text, conf, left, top=10, width=40, height=20):
 class HebrewSecondOpinionTests(unittest.TestCase):
     LATIN = [word('DN', 78, 0), word('cli.py', 90, 100), word('NN', 95, 200), word('ON', 80, 300)]
     HEB = [word('אם', 93, 2), word('קלי', 40, 100),
-           word('ממנו', 91, 201), word('Latin', 99, 300)]
+           word('ממנו', 85, 201), word('Latin', 99, 300)]
 
     def run_pass(self, allow=True, warnings=('mixed_tokens:3',), lang='heb+eng'):
         calls = []
@@ -108,9 +108,9 @@ class HebrewSecondOpinionTests(unittest.TestCase):
 
     def test_swaps_only_suspicious_tokens_with_higher_pure_hebrew_confidence(self):
         (text, report, warnings), calls = self.run_pass()
-        # DN -> Hebrew (93 > 78); cli.py not a candidate; NN -> Hebrew (91 < 95, kept); ON -> Latin overlap, kept
+        # DN -> Hebrew (93 > 78); cli.py: Hebrew reading weak; NN: Hebrew 85 is more than 5 below 95, kept; ON: Latin overlap
         self.assertEqual(text, 'אם cli.py NN ON')
-        self.assertEqual(report['retry']['hebrew_pass'], {'candidates': 3, 'replaced': 1})
+        self.assertEqual(report['retry']['hebrew_pass'], {'candidates': 4, 'replaced': 1})
         self.assertNotIn('_words', report)
         self.assertEqual(warnings, [])
 
@@ -141,6 +141,54 @@ class HebrewSecondOpinionTests(unittest.TestCase):
         for lang in ('heb', 'eng'):
             (_, report, _), calls = self.run_pass(lang=lang)
             self.assertNotIn('hebrew_pass', report['retry'], lang)
+
+
+class WidenedTriggerAndEnglishPassTests(unittest.TestCase):
+    def run_page(self, text, first, others, warnings=()):
+        """first: heb+eng words; others: {'heb': words, 'eng': words}. Returns (text, report, languages read)."""
+        calls = []
+
+        def fake_extract(exe, image, a):
+            calls.append(a.lang)
+            words = first if a.lang == 'heb+eng' else others.get(a.lang, [])
+            return text, {'_words': list(words), 'word_count': len(first), 'low_confidence_words': []}
+
+        with patch.object(ocr, 'extract', fake_extract),                 patch.object(ocr, 'quality_warnings', lambda t, r: list(warnings)):
+            out = ocr.extract_with_retry('tess', Image.new('RGB', (4, 4)), args(), True)
+        return out[0], out[1], calls
+
+    def test_hebrew_text_with_noise_token_runs_hebrew_pass_without_warning(self):
+        first = [word('שלום', 90, 0), word('ON', 92, 100)]
+        text, report, calls = self.run_page('שלום ON', first, {'heb': [word('אם', 91, 101)]})
+        self.assertEqual((text, calls), ('שלום אם', ['heb+eng', 'heb']))  # 91 is within 5 points of 92
+        self.assertEqual(report['retry']['hebrew_pass'], {'candidates': 1, 'replaced': 1})
+        self.assertEqual(report['retry']['english_pass']['candidates'], 0)
+
+    def test_clean_text_runs_no_extra_pass(self):
+        first = [word('שלום', 90, 0), word('CLI', 92, 100), word('shift+tab', 90, 200)]
+        text, report, calls = self.run_page('שלום CLI shift+tab', first, {})
+        self.assertEqual(calls, ['heb+eng'])
+        self.assertNotIn('hebrew_pass', report['retry'])
+
+    def test_english_pass_swaps_only_junk_hebrew_token_for_pure_ascii(self):
+        first = [word('זאפזחס6/', 89, 0), word('עוד', 90, 100)]
+        eng = [word('/context', 90, 1), word('xy', 99, 101)]
+        text, report, calls = self.run_page('זאפזחס6/ עוד', first, {'eng': eng})
+        self.assertEqual(text, '/context עוד')  # plain Hebrew word with strong Hebrew conf is never touched
+        self.assertEqual(report['retry']['english_pass'], {'candidates': 1, 'replaced': 1})
+
+    def test_english_pass_requires_ascii_token_and_higher_confidence(self):
+        first = [word('זאפ6/', 89, 0), word('אבג5', 80, 100), word('ספרד', 40, 200), word('הלו', 40, 300)]
+        eng = [word('/ab', 80, 1), word('עב1', 99, 101), word('ab', 60, 201), word('hello', 95, 301)]
+        text, report, _ = self.run_page('זאפ6/ אבג5 ספרד הלו', first, {'eng': eng})
+        # lower conf; non-ASCII reading; weak Hebrew but English only 60 (< 80); weak Hebrew + English 95 -> swap
+        self.assertEqual(text, 'זאפ6/ אבג5 ספרד hello')
+
+    def test_mixed_tokens_warning_flags_three_in_long_text(self):
+        text = ' '.join(['שלום'] * 300) + ' ON אבג1 אבג2'
+        self.assertTrue(any(w.startswith('mixed_tokens') for w in ocr.quality_warnings(text, {})))
+        clean_text = ' '.join(['שלום'] * 300) + ' ON'
+        self.assertEqual(ocr.quality_warnings(clean_text, {}), [])
 
 
 if __name__ == '__main__':

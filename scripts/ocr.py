@@ -98,7 +98,8 @@ def extract(exe, image, args):
         cmd += ['-c', 'tessedit_create_txt=1', '-c', 'tessedit_create_tsv=1']
         run(cmd)
         text = clean(base.with_suffix('.txt').read_text(encoding='utf-8')).strip()
-        rows = list(csv.DictReader(io.StringIO(base.with_suffix('.tsv').read_text(encoding='utf-8')), delimiter='\t'))
+        rows = list(csv.DictReader(io.StringIO(base.with_suffix('.tsv').read_text(encoding='utf-8')),
+                                   delimiter='\t', quoting=csv.QUOTE_NONE))  # a word starting with " must not swallow rows
         words = [r for r in rows if r.get('level') == '5' and r.get('text', '').strip()]
         low = [{'text': r['text'], 'confidence': float(r['conf'])} for r in words if float(r['conf']) < 60]
         raw_text = text
@@ -186,7 +187,7 @@ def quality_warnings(text, report):
     """Return warning codes like 'mixed_tokens:3'. Empty list means no concern."""
     out = []
     s = suspicion(text)
-    if s['mixed'] >= 2 and s['mixed'] / max(1, s['tokens']) > 0.04:
+    if s['mixed'] >= 2 and (s['mixed'] >= 3 or s['mixed'] / max(1, s['tokens']) > 0.04):
         out.append(f"mixed_tokens:{s['mixed']}")
     if s['final_start'] >= 3 and s['final_start'] > s['final_end']:
         out.append('reversed_order')
@@ -206,7 +207,12 @@ RETRY_SETTINGS = {'scale': 2, 'psm': 6}
 
 
 HEBREW_ONLY = re.compile(r'^[^A-Za-z֐-׿]*[א-ת][^A-Za-z]*$')  # Hebrew + punctuation, no Latin
-MAX_HEBREW_SWAPS = 40
+ASCII_TOKEN = re.compile(r'^(?=.*[A-Za-z])[A-Za-z0-9/._:+\-]{2,}$')  # /context, shift+tab, model:sonnet
+MAX_SWAPS = 40
+NOISE_TOLERANCE = 5     # a look-alike Latin token yields to a pure-Hebrew reading that is at most this much less sure
+STRONG_HEBREW = 85      # other Latin/digit tokens yield only to a confident pure-Hebrew reading ...
+HEBREW_MARGIN = 5       # ... that also beats the first reading by this margin
+ENGLISH_MIN, ENGLISH_MARGIN, WEAK_HEBREW = 80, 30, 50
 
 
 def _misread_candidate(token):
@@ -215,32 +221,36 @@ def _misread_candidate(token):
     return is_noise_token(core) or bool(HEBREW.search(core) and re.search(r'\d', core))
 
 
-def hebrew_second_opinion(exe, image, args, text, words):
-    """Re-read the page with `-l heb` only (same scale/psm) and, for each suspicious token, take the Hebrew-only
-    reading of the same box ONLY when it is pure Hebrew and has higher Tesseract confidence.
+def _english_candidate(token, conf):
+    """Junk-looking Hebrew token: Hebrew letters glued to digits/slashes, or a low-confidence Hebrew word."""
+    core = token.strip('.,:;!?()"\'')
+    if HEBREW.search(core) and re.search(r'[\d/]', core):
+        return True
+    return bool(HEBREW_ONLY.match(core)) and conf < WEAK_HEBREW
 
-    Both readings are genuine Tesseract output: tokens are chosen, never edited or mapped. English/code tokens
-    that do not look like a misread are never touched. Returns (new_text, candidates, replaced).
-    """
-    heb_args = copy.copy(args)
-    heb_args.lang = 'heb'
-    _, report = extract(exe, image, heb_args)
-    heb_words = [dict(w, text=clean(w['text']).strip()) for w in report.pop('_words', [])]
-    swaps, candidates = [], 0
-    for w in words:
-        token = clean(w['text']).strip()
-        if not token or not _misread_candidate(token):
-            continue
-        candidates += 1
-        x, y, width, height = (int(w[k]) for k in ('left', 'top', 'width', 'height'))
-        overlap = [h for h in heb_words
-                   if int(h['left']) < x + width and int(h['left']) + int(h['width']) > x
-                   and abs(int(h['top']) + int(h['height']) / 2 - (y + height / 2)) < height * 0.5]
-        if overlap and all(HEBREW_ONLY.match(h['text']) for h in overlap) \
-                and sum(float(h['conf']) for h in overlap) / len(overlap) > float(w['conf']):
-            swaps.append((token, ' '.join(h['text'] for h in overlap)))
-        if len(swaps) >= MAX_HEBREW_SWAPS:
-            break
+
+def needs_second_opinion(text, words):
+    """True if a Hebrew text still holds a look-alike or junk token a second language pass could settle."""
+    return bool(HEBREW.search(text)) and any(
+        _misread_candidate(clean(w['text']).strip()) or _english_candidate(clean(w['text']).strip(), float(w['conf']))
+        for w in words)
+
+
+def _read_again(exe, image, args, lang):
+    other = copy.copy(args)
+    other.lang = lang
+    _, report = extract(exe, image, other)
+    return [dict(w, text=clean(w['text']).strip()) for w in report.pop('_words', [])]
+
+
+def _same_box(word, others):
+    x, y, width, height = (int(word[k]) for k in ('left', 'top', 'width', 'height'))
+    return [o for o in others
+            if int(o['left']) < x + width and int(o['left']) + int(o['width']) > x
+            and abs(int(o['top']) + int(o['height']) / 2 - (y + height / 2)) < height * 0.5]
+
+
+def _replace_tokens(text, swaps):
     pieces, pos = [], 0
     for old, new in swaps:
         m = re.search(r'(?<!\S)' + re.escape(old) + r'(?!\S)', text[pos:])  # whole token only
@@ -248,15 +258,78 @@ def hebrew_second_opinion(exe, image, args, text, words):
             pieces += [text[pos:pos + m.start()], new]
             pos += m.end()
     pieces.append(text[pos:])
-    return ''.join(pieces), candidates, len(swaps)
+    return ''.join(pieces)
+
+
+def hebrew_second_opinion(exe, image, args, text, words):
+    """Re-read the page with `-l heb` only (same scale/psm). A token that contains Latin letters or digits yields to
+    the Hebrew-only reading of the same box when that reading is pure Hebrew and Tesseract is more sure of it:
+    look-alike clusters (DN, ON) within NOISE_TOLERANCE points, any other Latin/digit token (anid, 921") only if the
+    Hebrew reading is confident (STRONG_HEBREW) and better by HEBREW_MARGIN. Real English/code is read with low
+    confidence by the Hebrew model and keeps its reading.
+
+    Both readings are genuine Tesseract output: tokens are chosen, never edited or mapped.
+    Returns (new_text, candidates, replaced).
+    """
+    heb_words = _read_again(exe, image, args, 'heb')
+    swaps, candidates = [], 0
+    for w in words:
+        token = clean(w['text']).strip()
+        if not token or not LATIN_OR_DIGIT.search(token):
+            continue
+        candidates += 1
+        overlap = _same_box(w, heb_words)
+        if not overlap or not all(HEBREW_ONLY.match(h['text']) for h in overlap):
+            continue
+        heb = sum(float(h['conf']) for h in overlap) / len(overlap)
+        first = float(w['conf'])
+        better = heb >= first - NOISE_TOLERANCE if is_noise_token(token.strip('.,:;!?()"\'')) \
+            else heb >= STRONG_HEBREW and heb >= first + HEBREW_MARGIN
+        if better:
+            swaps.append((token, ' '.join(h['text'] for h in overlap)))
+        if len(swaps) >= MAX_SWAPS:
+            break
+    return _replace_tokens(text, swaps), candidates, len(swaps)
+
+
+def english_second_opinion(exe, image, args, text, words):
+    """Mirror of hebrew_second_opinion with `-l eng` for the reverse error: English/code read as Hebrew-letter junk.
+
+    Only junk-looking Hebrew tokens are candidates (see _english_candidate). One pure ASCII token (/context) at the
+    same box replaces a mixed Hebrew+digit/slash token (never a real Hebrew word) when it is at most NOISE_TOLERANCE less sure; a plain Hebrew word is replaced
+    only when it is weak (< WEAK_HEBREW) and the English reading is strong (>= ENGLISH_MIN, ENGLISH_MARGIN better).
+    Returns (new_text, candidates, replaced).
+    """
+    eng_words = None
+    swaps, candidates = [], 0
+    for w in words:
+        token = clean(w['text']).strip()
+        first = float(w['conf'])
+        if not token or not _english_candidate(token, first):
+            continue
+        if eng_words is None:
+            eng_words = _read_again(exe, image, args, 'eng')
+        candidates += 1
+        overlap = _same_box(w, eng_words)
+        if len(overlap) != 1 or not ASCII_TOKEN.match(overlap[0]['text']):
+            continue
+        eng = float(overlap[0]['conf'])
+        mixed = bool(HEBREW.search(token) and re.search(r'[\d/]', token))
+        if (eng >= first - NOISE_TOLERANCE) if mixed else (eng >= ENGLISH_MIN and eng >= first + ENGLISH_MARGIN):
+            swaps.append((token, overlap[0]['text']))
+        if len(swaps) >= MAX_SWAPS:
+            break
+    return _replace_tokens(text, swaps), candidates, len(swaps)
 
 
 def extract_with_retry(exe, image, args, allow_retry):
     """Normal pass; if it has warnings, one second pass (scale 2, psm 6). Keep the one with fewer warnings.
 
-    If `mixed_tokens` remains on a heb+eng read, one more `-l heb` pass supplies a second opinion for the
-    suspicious tokens (see hebrew_second_opinion). All results are genuine Tesseract output: nothing is
-    corrected, only chosen. Tie keeps the first. Everything extra is skipped when allow_retry is False.
+    On a heb+eng read of Hebrew text that still has a `mixed_tokens` warning or a look-alike/junk token
+    (needs_second_opinion), a `-l heb` pass and, only if junk-looking Hebrew tokens exist, a `-l eng` pass
+    supply second opinions (hebrew_second_opinion, english_second_opinion): at most two extra full passes.
+    All results are genuine Tesseract output: nothing is corrected, only chosen. Tie keeps the first.
+    Everything extra is skipped when allow_retry is False.
     """
     text, report = extract(exe, image, args)
     warnings = quality_warnings(text, report) if text else []
@@ -275,18 +348,22 @@ def extract_with_retry(exe, image, args, allow_retry):
             text, report, warnings = text2, report2, warnings2
             used_args = second_args
             retry['chosen'] = 'second'
-        words = report.get('_words')
-        if (words and any(w.startswith('mixed_tokens') for w in warnings)
-                and 'heb' in args.lang and args.lang != 'heb' and 'eng' in args.lang):
+    words = report.get('_words')
+    if (allow_retry and text and words and not getattr(args, 'table', False)
+            and 'heb' in args.lang and args.lang != 'heb' and 'eng' in args.lang
+            and (any(w.startswith('mixed_tokens') for w in warnings) or needs_second_opinion(text, words))):
+        changed = False
+        for name, opinion in (('hebrew_pass', hebrew_second_opinion), ('english_pass', english_second_opinion)):
             try:
-                new_text, candidates, replaced = hebrew_second_opinion(exe, image, used_args, text, words)
+                new_text, candidates, replaced = opinion(exe, image, used_args, text, words)
             except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
                 new_text, candidates, replaced = text, 0, 0
-            retry['hebrew_pass'] = {'candidates': candidates, 'replaced': replaced}
+            retry[name] = {'candidates': candidates, 'replaced': replaced}
             if replaced:
-                text = new_text
-                report['checks'] = {'hebrew': hebrew_check(text), 'preservation': preservation(text, text)}
-                warnings = quality_warnings(text, report)
+                text, changed = new_text, True
+        if changed:
+            report['checks'] = {'hebrew': hebrew_check(text), 'preservation': preservation(text, text)}
+            warnings = quality_warnings(text, report)
     report.pop('_words', None)
     report['retry'] = retry
     return text, report, warnings

@@ -159,12 +159,16 @@ Reports can contain recognized text fragments; they are saved only when requeste
   fewer warnings (a tie keeps the first). Nothing is corrected. The report records
   `retry: {used, chosen}`. Skipped when you pass `--scale` or `--psm`, in `--table` mode,
   or with `--no-retry`.
-- **Hebrew second opinion.** If `mixed_tokens` remains on a `heb+eng` read, one extra `-l heb`
-  pass re-reads the page. Only short look-alike Latin clusters (e.g. `DN`, `ANN`, `Op`) or
-  Hebrew glued to digits are swapped, and only for a pure-Hebrew word at the same box with
-  higher Tesseract confidence (at most 40). Tokens are chosen between two genuine outputs,
-  never edited; the report adds `retry.hebrew_pass: {candidates, replaced}`. Hebrew words
-  read as longer Latin words (e.g. `non`) and glued prefixes (`tracesn`) are not fixed.
+- **Second opinions.** On a `heb+eng` read of Hebrew text that still has a `mixed_tokens` warning
+  or any look-alike/junk token (`ON`, `DN`, Hebrew glued to digits), one extra `-l heb` pass
+  re-reads the page; a token with Latin letters or digits is swapped for the pure-Hebrew word at
+  the same box when Tesseract is more sure of it (look-alikes within 5 points, other tokens only
+  at confidence 85+ and 5 better). If junk-looking Hebrew tokens remain (`זאפזחס6/`), one `-l eng`
+  pass may swap one for a pure ASCII token (`/context`) at the same box, never a real Hebrew word
+  unless the English reading is far stronger. Tokens are chosen between two genuine outputs, never
+  edited or mapped (at most 40 per pass); the report adds `retry.hebrew_pass` and
+  `retry.english_pass: {candidates, replaced}`. Expect up to two extra full passes (several
+  seconds). Longer Latin words read for Hebrew (`Jusagen`) and glued prefixes are not fixed.
 - **Reading order is uncertain.** Mixed RTL/LTR punctuation and multi-column layouts
   may reorder content. No automatic reversal of Hebrew strings is performed.
 - **Preservation is not OCR verification.** Word/number inventory checks compare the
