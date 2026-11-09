@@ -137,6 +137,34 @@ def _popup(root_win, w, h):
     return win, inner
 
 
+def _bind_consent(offered):
+    """Bind the user's Yes to the clipboard state at click time.
+
+    Windows may bump the sequence after the offer (burst length is unbounded),
+    so the offer-time sequence can be stale although the image is still there.
+    Returns the current sequence to pass to ocr.py (which still refuses a change
+    between now and the write), or None when the clipboard no longer holds an
+    image (or changed while checking) and OCR must not run. Marks the sequence
+    handled so the poller does not offer it a second time.
+    """
+    try:
+        now = _clipboard.sequence()
+        is_image = _clipboard.has_image()
+        if _clipboard.sequence() != now:
+            _log(f"consent refused: clipboard changed during check offered={offered} now={now}")
+            return None
+    except Exception as exc:
+        _log(f"consent check failed: {exc!r}")
+        return None
+    if not is_image:
+        _log(f"consent refused: clipboard no longer holds an image offered={offered} now={now}")
+        return None
+    _log(f"consent bound seq offered={offered} click={now}")
+    if _poller is not None:
+        _poller.handled, _poller.pending = now, None
+    return now
+
+
 def _make_toast(root_win, sequence):
     global _busy
     _busy = True
@@ -162,12 +190,12 @@ def _make_toast(root_win, sequence):
             pass
         win.destroy()
         if yes:
-            try:
-                _log(f"consent seq offered={sequence} now={_clipboard.sequence()}")
-            except Exception:
-                pass
+            bound = _bind_consent(sequence)
+            if bound is None:
+                _show_result(root_win, {"ok": False, "changed": True, "msg": "", "warnings": []})
+                return
             _show_working(root_win)
-            threading.Thread(target=_run_ocr_bg, args=(sequence,), daemon=True).start()
+            threading.Thread(target=_run_ocr_bg, args=(bound,), daemon=True).start()
         else:
             _busy = False
 

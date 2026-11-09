@@ -235,8 +235,14 @@ class WatcherTests(unittest.TestCase):
         loader = importlib.machinery.SourceFileLoader('watcher_test', str(ROOT/'clipboard-watcher.pyw'))
         spec = importlib.util.spec_from_loader(loader.name, loader)
         cls.module = importlib.util.module_from_spec(spec)
-        # Prevent test error events from creating a repository log.
         loader.exec_module(cls.module)
+        # Never let tests write to the real watcher.log.
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.module.LOG_FILE = Path(cls._tmp.name) / 'watcher.log'
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
 
     def test_worker_binds_consent_and_reports_conflict(self):
         m = self.module
@@ -254,7 +260,7 @@ class WatcherTests(unittest.TestCase):
         results = queue.Queue(); results.put({'ok':True})
         def show(*args): m._busy = False
         with patch.object(m, '_busy', True), patch.object(m, '_clipboard', clip), \
-             patch.object(m, '_poller', poller), patch.object(m, '_results', results), \
+             patch.object(m, '_poller', poller), patch.object(m, '_results', results), patch.object(m, '_log'), \
              patch.object(m, '_show_result', side_effect=show), patch.object(m, '_make_toast') as toast:
             root = Mock()
             m._pump(root)
@@ -265,6 +271,47 @@ class WatcherTests(unittest.TestCase):
                 m._pump(root)
             toast.assert_called_once_with(root, 2)
             self.assertEqual(root.after.call_count, 3)
+
+    def test_consent_binds_to_click_time_sequence_without_second_offer(self):
+        m = self.module
+        clip, poller = FakeClipboard(2065), ClipboardPoller(2063)  # bumped after the offer; image still present
+        with patch.object(m, '_clipboard', clip), patch.object(m, '_poller', poller), patch.object(m, '_log'):
+            self.assertEqual(m._bind_consent(2063), 2065)
+        self.assertEqual(poller.handled, 2065)
+        self.assertIsNone(poller.poll(clip, False, 100))   # no duplicate toast
+        self.assertIsNone(poller.poll(clip, False, 200))
+
+    def test_consent_with_text_on_clipboard_runs_no_ocr(self):
+        m = self.module
+        clip, poller = FakeClipboard(5, image=False), ClipboardPoller(2)
+        with patch.object(m, '_clipboard', clip), patch.object(m, '_poller', poller), patch.object(m, '_log'):
+            self.assertIsNone(m._bind_consent(2))   # caller shows the clipboard_changed toast
+        self.assertEqual(poller.handled, 2)
+
+    def test_consent_refused_when_clipboard_changes_during_check(self):
+        m = self.module
+        clip = FakeClipboard(5)
+        def has_image():
+            clip.seq = 6
+            return True
+        clip.has_image = has_image
+        with patch.object(m, '_clipboard', clip), patch.object(m, '_poller', ClipboardPoller(2)), patch.object(m, '_log'):
+            self.assertIsNone(m._bind_consent(2))
+
+    def test_change_after_click_is_refused_by_bound_sequence(self):
+        m = self.module
+        clip = FakeClipboard(2065)
+        with patch.object(m, '_clipboard', clip), patch.object(m, '_poller', ClipboardPoller(2063)), patch.object(m, '_log'):
+            bound = m._bind_consent(2063)
+        clip.seq = 2066   # user copies text after clicking Yes
+        with self.assertRaises(ClipboardChanged):
+            clip.copy_text('ocr text', bound)
+        self.assertEqual(clip.value, 'original')
+        with self.assertRaises(ClipboardChanged):
+            read_image(clip, Mock(), bound)
+
+    def test_tests_never_log_to_real_watcher_log(self):
+        self.assertNotEqual(self.module.LOG_FILE.resolve(), (ROOT / 'watcher.log').resolve())
 
 
 @unittest.skipUnless(shutil.which('tesseract'), 'Tesseract is not installed')
