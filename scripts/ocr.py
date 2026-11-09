@@ -243,10 +243,10 @@ def hebrew_second_opinion(exe, image, args, text, words):
             break
     pieces, pos = [], 0
     for old, new in swaps:
-        i = text.find(old, pos)
-        if i >= 0:
-            pieces += [text[pos:i], new]
-            pos = i + len(old)
+        m = re.search(r'(?<!\S)' + re.escape(old) + r'(?!\S)', text[pos:])  # whole token only
+        if m:
+            pieces += [text[pos:pos + m.start()], new]
+            pos += m.end()
     pieces.append(text[pos:])
     return ''.join(pieces), candidates, len(swaps)
 

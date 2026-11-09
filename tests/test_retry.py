@@ -114,6 +114,17 @@ class HebrewSecondOpinionTests(unittest.TestCase):
         self.assertNotIn('_words', report)
         self.assertEqual(warnings, [])
 
+    def test_swap_matches_whole_tokens_only(self):
+        words = [word('NN', 50, 0)]
+        heb = [word('אני', 90, 0)]
+
+        def fake_extract(exe, image, a):
+            return '', {'_words': list(heb)}
+
+        with patch.object(ocr, 'extract', fake_extract):
+            text, candidates, replaced = ocr.hebrew_second_opinion('tess', None, args(), 'NANNY NN', words)
+        self.assertEqual((text, replaced), ('NANNY אני', 1))
+
     def test_no_retry_disables_hebrew_pass(self):
         (text, report, _), calls = self.run_pass(allow=False)
         self.assertEqual(calls, ['heb+eng'])
