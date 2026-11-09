@@ -37,6 +37,7 @@ CREATE_NO_WINDOW = 0x08000000
 POLL_MS = 500      # clipboard poll interval
 TOAST_MS = 9000    # auto-dismiss the question popup
 DEBOUNCE_S = 3.0   # min seconds between popups
+SETTLE_S = 1.0     # clipboard sequence must be stable this long before offering
 
 # -- Logging (never logs extracted text) --------------------------------------
 
@@ -161,6 +162,10 @@ def _make_toast(root_win, sequence):
             pass
         win.destroy()
         if yes:
+            try:
+                _log(f"consent seq offered={sequence} now={_clipboard.sequence()}")
+            except Exception:
+                pass
             _show_working(root_win)
             threading.Thread(target=_run_ocr_bg, args=(sequence,), daemon=True).start()
         else:
@@ -227,6 +232,7 @@ def _pump(root_win):
     try:
         sequence = _poller.poll(_clipboard, _busy, time.monotonic())
         if sequence is not None:
+            _log(f"toast offered seq={sequence}")
             _make_toast(root_win, sequence)
     except Exception as exc:
         _log(f"watcher error: {exc!r}")
@@ -244,7 +250,7 @@ def main():
     root.withdraw()
     root.title("Screenshot Context Watcher")
     _clipboard = WindowsClipboard()
-    _poller = ClipboardPoller(_clipboard.sequence(), DEBOUNCE_S)
+    _poller = ClipboardPoller(_clipboard.sequence(), DEBOUNCE_S, SETTLE_S, _log)
     _log("watcher started")
     _results.put({"started": True})
     root.after(POLL_MS, lambda: _pump(root))

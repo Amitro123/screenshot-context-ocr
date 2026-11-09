@@ -64,23 +64,56 @@ class ClipboardTests(unittest.TestCase):
         clip, poller = FakeClipboard(2), ClipboardPoller(1)
         self.assertIsNone(poller.poll(clip, True, 10))
         self.assertEqual(clip.format_reads, 0)
-        self.assertEqual(poller.poll(clip, False, 11), 2)
+        self.assertIsNone(poller.poll(clip, False, 11))   # first sight: settling
+        self.assertEqual(poller.poll(clip, False, 12), 2)
         self.assertIsNone(poller.poll(clip, False, 20))
+
+    def test_offer_waits_for_sequence_to_settle(self):
+        clip, poller = FakeClipboard(2), ClipboardPoller(1, settle=1.0)
+        self.assertIsNone(poller.poll(clip, False, 10.0))
+        clip.seq = 3                                      # Snipping Tool burst
+        self.assertIsNone(poller.poll(clip, False, 10.5))
+        clip.seq = 4
+        self.assertIsNone(poller.poll(clip, False, 11.2))
+        self.assertIsNone(poller.poll(clip, False, 12.0))  # only 0.8s since last change
+        self.assertEqual(poller.poll(clip, False, 12.3), 4)
+        self.assertEqual(clip.format_reads, 1)
+
+    def test_text_item_is_never_offered_but_marked_handled(self):
+        clip, poller = FakeClipboard(2, image=False), ClipboardPoller(1)
+        poller.poll(clip, False, 10)
+        self.assertIsNone(poller.poll(clip, False, 12))
+        self.assertEqual(poller.handled, 2)
+
+    def test_poller_logs_sequence_changes_without_content(self):
+        log = Mock()
+        clip, poller = FakeClipboard(2), ClipboardPoller(1, log=log)
+        poller.poll(clip, False, 10)
+        log.assert_called_once_with('clipboard sequence 1 -> 2')
+
+    def test_changed_error_reports_both_sequences(self):
+        with self.assertRaises(ClipboardChanged) as ctx:
+            read_image(FakeClipboard(5), Mock(), 3)
+        self.assertIn('expected sequence 3, now 5', str(ctx.exception))
 
     def test_debounce_defers_instead_of_dropping(self):
         clip, poller = FakeClipboard(2), ClipboardPoller(1)
-        self.assertEqual(poller.poll(clip, False, 10), 2)
+        poller.poll(clip, False, 10)
+        self.assertEqual(poller.poll(clip, False, 11), 2)
         clip.seq = 3
-        self.assertIsNone(poller.poll(clip, False, 11))
-        self.assertEqual(poller.poll(clip, False, 13), 3)
+        self.assertIsNone(poller.poll(clip, False, 12))   # new item, settling
+        self.assertIsNone(poller.poll(clip, False, 13))   # settled, inside debounce
+        self.assertEqual(poller.poll(clip, False, 14), 3)
 
     def test_latest_image_wins_and_new_text_cancels_pending(self):
         clip, poller = FakeClipboard(2), ClipboardPoller(1)
         poller.poll(clip, True, 10)
         clip.seq = 3
-        self.assertEqual(poller.poll(clip, False, 11), 3)
+        poller.poll(clip, False, 11)
+        self.assertEqual(poller.poll(clip, False, 12), 3)
         clip.seq, clip.image = 4, False
-        self.assertIsNone(poller.poll(clip, False, 15))
+        poller.poll(clip, False, 15)
+        self.assertIsNone(poller.poll(clip, False, 16.5))
         self.assertEqual(poller.handled, 4)
 
     def test_format_check_race_is_retried(self):
@@ -89,8 +122,10 @@ class ClipboardTests(unittest.TestCase):
             clip.seq = 3
             return True
         clip.has_image = has_image
-        self.assertIsNone(poller.poll(clip, False, 10))
-        self.assertEqual(poller.poll(clip, False, 11), 3)
+        poller.poll(clip, False, 10)
+        self.assertIsNone(poller.poll(clip, False, 11))   # race detected, retry
+        self.assertIsNone(poller.poll(clip, False, 12))   # new seq settling
+        self.assertEqual(poller.poll(clip, False, 13), 3)
 
     def test_native_copy_checks_after_acquiring_lock(self):
         # Exercise actual copy method with fake Win32 functions, including a change
@@ -223,8 +258,13 @@ class WatcherTests(unittest.TestCase):
              patch.object(m, '_show_result', side_effect=show), patch.object(m, '_make_toast') as toast:
             root = Mock()
             m._pump(root)
+            self.assertEqual(toast.call_count, 0)   # first sight: settling
+            m._pump(root)
+            self.assertEqual(toast.call_count, 0)
+            with patch.object(m.time, 'monotonic', return_value=1e9):
+                m._pump(root)
             toast.assert_called_once_with(root, 2)
-            root.after.assert_called_once()
+            self.assertEqual(root.after.call_count, 3)
 
 
 @unittest.skipUnless(shutil.which('tesseract'), 'Tesseract is not installed')

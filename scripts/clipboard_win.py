@@ -77,8 +77,11 @@ class WindowsClipboard:
             if not opened:
                 raise RuntimeError('Clipboard is busy. Please try again.')
             # Atomic with respect to other clipboard writers: compare AFTER locking.
-            if self.sequence() != expected_sequence:
-                raise ClipboardChanged('Clipboard changed; newer content was preserved. Run OCR again.')
+            current = self.sequence()
+            if current != expected_sequence:
+                raise ClipboardChanged('Clipboard changed (expected sequence %s, now %s); '
+                                       'newer content was preserved. Run OCR again.'
+                                       % (expected_sequence, current))
             if not self.user.EmptyClipboard():
                 raise ctypes.WinError(ctypes.get_last_error())
             if not self.user.SetClipboardData(13, memory):  # CF_UNICODETEXT
@@ -96,31 +99,53 @@ class WindowsClipboard:
 def read_image(clipboard, grab, expected_sequence=None):
     """Bind an image to a sequence; refuse changes before or during pixel retrieval."""
     sequence = clipboard.sequence() if expected_sequence is None else expected_sequence
-    if clipboard.sequence() != sequence:
-        raise ClipboardChanged('Clipboard changed before extraction; capture or confirm the new image.')
+    current = clipboard.sequence()
+    if current != sequence:
+        raise ClipboardChanged('Clipboard changed before extraction (expected sequence %s, now %s); '
+                               'capture or confirm the new image.' % (sequence, current))
     image = grab()
-    if clipboard.sequence() != sequence:
-        raise ClipboardChanged('Clipboard changed while reading; newer content was preserved.')
+    current = clipboard.sequence()
+    if current != sequence:
+        raise ClipboardChanged('Clipboard changed while reading (expected sequence %s, now %s); '
+                               'newer content was preserved.' % (sequence, current))
     return image, sequence
 
 
 class ClipboardPoller:
-    """Coalesce changes to the latest clipboard item without consuming busy events."""
-    def __init__(self, sequence, debounce=3.0):
+    """Offer the latest stable clipboard image without consuming busy events.
+
+    An item is offered only after its sequence number stayed unchanged for
+    `settle` seconds: the Windows 11 Snipping Tool / clipboard history may bump
+    the sequence several times after an image appears, which would make an
+    early offer stale before the user answers.
+    """
+    def __init__(self, sequence, debounce=3.0, settle=1.0, log=None):
         self.handled = sequence
         self.last_offer = float('-inf')
         self.debounce = debounce
+        self.settle = settle
+        self.log = log
+        self.pending = None        # sequence currently settling
+        self.pending_since = 0.0   # when it was first seen
 
     def poll(self, clipboard, busy, now):
-        if busy or now - self.last_offer < self.debounce:
+        if busy:
             return None
         sequence = clipboard.sequence()
         if sequence == self.handled:
+            self.pending = None
+            return None
+        if sequence != self.pending:
+            if self.log:
+                self.log('clipboard sequence %s -> %s' % (self.pending or self.handled, sequence))
+            self.pending, self.pending_since = sequence, now
+            return None  # new or still-changing item: wait for it to settle
+        if now - self.pending_since < self.settle or now - self.last_offer < self.debounce:
             return None
         is_image = clipboard.has_image()
         if clipboard.sequence() != sequence:
             return None  # Retry a stable item on the next poll.
-        self.handled = sequence
+        self.handled, self.pending = sequence, None
         if is_image:
             self.last_offer = now
             return sequence
