@@ -158,7 +158,12 @@ Reports can contain recognized text fragments; they are saved only when requeste
   OCR runs once more with scale 2 and psm 6 and keeps whichever genuine Tesseract output has
   fewer warnings (a tie keeps the first). Nothing is corrected. The report records
   `retry: {used, chosen}`. Skipped when you pass `--scale` or `--psm`, in `--table` mode,
-  or with `--no-retry`.
+  or with `--no-retry`. On light pages the retry also reads the darkest RGB channel, which keeps
+  pale coloured text (hyperlink purple) from fading out.
+- **Dropped lines.** `ink_check.py` erases every OCR word box from the image and flags text-height
+  bands of ink that no word accounts for: `possible_missed_lines:N` (this also triggers the retry, which wins
+  on fewer such bands). It is a heuristic: a single missed word, a missed line beside a column that
+  was read, or a tall diagram is not caught; thresholds were tuned on a handful of screenshots.
 - **Second opinions.** On a `heb+eng` read of Hebrew text that still has a `mixed_tokens` warning
   or any look-alike/junk token (`ON`, `DN`, Hebrew glued to digits), one extra `-l heb` pass
   re-reads the page; a token with Latin letters or digits is swapped for the pure-Hebrew word at

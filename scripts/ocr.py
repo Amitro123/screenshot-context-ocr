@@ -11,7 +11,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from PIL import Image, ImageDraw, ImageGrab, ImageOps, ImageStat
+from PIL import Image, ImageChops, ImageDraw, ImageGrab, ImageOps, ImageStat
+from ink_check import missed_line_bands
 from clipboard_win import ClipboardChanged, WindowsClipboard, read_image
 from output_checks import hebrew_check, preservation, table_text
 
@@ -77,13 +78,19 @@ def flatten(image):
     return background.convert('RGB')
 
 
-def preprocess(image, scale, invert):
+def preprocess(image, scale, invert, gray_mode='lum'):
+    """Grayscale, auto-invert dark themes, scale, pad. gray_mode 'min' (retry only) takes the darkest RGB channel of a
+    light page: pale coloured text (hyperlink purple) stays dark instead of fading to mid-gray. Dark pages keep 'lum'."""
     image.load()
     if image.width * image.height * scale * scale > 80_000_000:
         raise ValueError('Image too large. Crop it or lower --scale.')
-    gray = flatten(image).convert('L')
+    rgb = flatten(image)
+    gray = rgb.convert('L')
     if invert == 'yes' or (invert == 'auto' and ImageStat.Stat(gray).mean[0] < 100):
         gray = ImageOps.invert(gray)
+    elif gray_mode == 'min':
+        r, g, b = rgb.split()
+        gray = ImageChops.darker(ImageChops.darker(r, g), b)
     return ImageOps.expand(gray.resize((gray.width * scale, gray.height * scale), Image.Resampling.LANCZOS), border=20, fill=255)
 
 
@@ -91,7 +98,7 @@ def extract(exe, image, args):
     with tempfile.TemporaryDirectory(prefix='screenshot-ocr-') as tmp:
         source = Path(tmp) / 'input.png'
         base = Path(tmp) / 'result'
-        preprocess(image, args.scale, args.invert).save(source)
+        preprocess(image, args.scale, args.invert, getattr(args, 'gray', 'lum')).save(source)
         cmd = [exe, str(source), str(base), '-l', args.lang, '--oem', '1', '--psm', str(args.psm)]
         if args.tessdata:
             cmd += ['--tessdata-dir', args.tessdata]
@@ -110,7 +117,9 @@ def extract(exe, image, args):
                       'schema_version': 1, 'source': 'ocr', 'engine': 'tesseract',
                       'recognition_accuracy': 'not_verified',
                       'languages': args.lang, 'word_count': len(words), 'low_confidence_words': low,
-                      'settings': {'scale': args.scale, 'psm': args.psm, 'invert': args.invert},
+                      'missed_line_bands': missed_line_bands(flatten(image), words, args.scale),
+                      'settings': {'scale': args.scale, 'psm': args.psm, 'invert': args.invert,
+                                   'gray': getattr(args, 'gray', 'lum')},
                       'image_size': list(image.size), 'table': layout,
                       'checks': {'hebrew': hebrew_check(raw_text),
                                  'preservation': preservation(raw_text, text)},
@@ -196,6 +205,8 @@ def quality_warnings(text, report):
         out.append('midword_final')
     if report.get('table', {}).get('status') == 'fallback':
         out.append('table_ambiguous')
+    if report.get('missed_line_bands', 0) > 0:
+        out.append(f"possible_missed_lines:{report['missed_line_bands']}")
     words = report.get('word_count', 0)
     low = len(report.get('low_confidence_words', []))
     if words >= 10 and low / words > 0.25:
@@ -203,7 +214,7 @@ def quality_warnings(text, report):
     return out
 
 
-RETRY_SETTINGS = {'scale': 2, 'psm': 6}
+RETRY_SETTINGS = {'scale': 2, 'psm': 6, 'gray': 'min'}
 
 
 HEBREW_ONLY = re.compile(r'^[^A-Za-z֐-׿]*[א-ת][^A-Za-z]*$')  # Hebrew + punctuation, no Latin
@@ -322,8 +333,20 @@ def english_second_opinion(exe, image, args, text, words):
     return _replace_tokens(text, swaps), candidates, len(swaps)
 
 
+def _better(warnings2, report2, warnings, report):
+    """Second reading wins on fewer warnings, then fewer possibly-missed line bands, then (only while lines are still
+    missing) clearly more words. Ties keep the first. Both readings are genuine Tesseract output."""
+    if len(warnings2) != len(warnings):
+        return len(warnings2) < len(warnings)
+    m1, m2 = report.get('missed_line_bands', 0), report2.get('missed_line_bands', 0)
+    if m1 != m2:
+        return m2 < m1
+    return m1 > 0 and report2.get('word_count', 0) > 1.05 * report.get('word_count', 0)
+
+
 def extract_with_retry(exe, image, args, allow_retry):
-    """Normal pass; if it has warnings, one second pass (scale 2, psm 6). Keep the one with fewer warnings.
+    """Normal pass; if it has warnings (incl. possible_missed_lines), one second pass (scale 2, psm 6, darkest-channel
+    gray on light pages). Keep the better one (see _better).
 
     On a heb+eng read of Hebrew text that still has a `mixed_tokens` warning or a look-alike/junk token
     (needs_second_opinion), a `-l heb` pass and, only if junk-looking Hebrew tokens exist, a `-l eng` pass
@@ -339,12 +362,13 @@ def extract_with_retry(exe, image, args, allow_retry):
         retry['used'] = True
         second_args = copy.copy(args)
         second_args.scale, second_args.psm = RETRY_SETTINGS['scale'], RETRY_SETTINGS['psm']
+        second_args.gray = RETRY_SETTINGS['gray']
         try:
             text2, report2 = extract(exe, image, second_args)
             warnings2 = quality_warnings(text2, report2) if text2 else None
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
             warnings2 = None
-        if warnings2 is not None and len(warnings2) < len(warnings):
+        if warnings2 is not None and _better(warnings2, report2, warnings, report):
             text, report, warnings = text2, report2, warnings2
             used_args = second_args
             retry['chosen'] = 'second'
